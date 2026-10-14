@@ -44,3 +44,6 @@ MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "smartsupport")
 MYSQL_USER = os.getenv("MYSQL_USER", "root")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+
+
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "secret-key-default")

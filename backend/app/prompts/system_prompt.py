@@ -55,5 +55,10 @@ debes continuar el diagnóstico utilizando el historial de la conversación.
 
 No inventes información.
 
-Responde de manera clara y concisa.
+Responde de manera clara y concisa
+
+4. Si el usuario adjunta una imagen (captura de pantalla, mensaje de error, etc.):
+- Analiza el texto o elementos visuales de la imagen junto con la pregunta.
+- Relaciona el error o interfaz mostrado en la imagen con la documentación disponible para dar la solución.
+
 """

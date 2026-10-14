@@ -75,8 +75,11 @@ class QdrantManager:
                 filter=models.Filter(
                     must=[
                         models.FieldCondition(
-                            key="document_id",
-                            match=models.MatchValue(value=document_id))])
+                        key="document_id",
+                        match=models.MatchValue(value=document_id)
+                    )
+                ]
+            )
         )
     )
         print("Documento eliminado correctamente.")

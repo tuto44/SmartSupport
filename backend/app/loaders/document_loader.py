@@ -1,18 +1,25 @@
 import os
-from langchain_community.document_loaders import(TextLoader,PyPDFLoader)
+from pathlib import Path
+from langchain_community.document_loaders import (TextLoader, PyPDFLoader)
 from app.models.document_file import DocumentFile
 from app.utils.hash_utils import generar_document_id
-from app.config import(DOCUMENTS_FOLDER,CHUNK_SIZE,CHUNK_OVERLAP)
+from app.config import DOCUMENTS_FOLDER
 
 class DocumentLoader:
     
     def __init__(self):
-        self.documents_folder = DOCUMENTS_FOLDER
-        
-
+        if os.path.exists(DOCUMENTS_FOLDER):
+            self.documents_folder = DOCUMENTS_FOLDER
+        else:
+            base_backend = Path(__file__).resolve().parent.parent.parent
+            self.documents_folder = str(base_backend / "documentos")
         
     def cargar_documentos(self):
         archivos = []
+
+        if not os.path.exists(self.documents_folder):
+            print(f"Advertencia: No existe la carpeta '{self.documents_folder}'.")
+            return archivos
 
         for file_name in os.listdir(self.documents_folder):
             file_path = os.path.join(
@@ -35,7 +42,3 @@ class DocumentLoader:
                 archivos.append(archivo)
                 
         return archivos
-    
-    
-    def dividir_en_chunks(self, documentos):
-        return self.text_splitter.split_documents(documentos)

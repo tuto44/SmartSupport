@@ -186,13 +186,15 @@ class ConversationService:
         try:
             cursor = connection.cursor()
 
-            sql = """
-                DELETE FROM conversations
-                WHERE id = %s
-            """
-
+            # 1. Eliminar historial de mensajes para reiniciar el contexto por completo
             cursor.execute(
-                sql,
+                "DELETE FROM chat_history WHERE conversation_id = %s",
+                (conversation_id,)
+            )
+
+            # 2. Eliminar registro de la conversación
+            cursor.execute(
+                "DELETE FROM conversations WHERE id = %s",
                 (conversation_id,)
             )
 

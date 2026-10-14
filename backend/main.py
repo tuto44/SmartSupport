@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-
+from fastapi import Request
 from app.api.routes import router
 
 app = FastAPI(title="Asistente Inteligente TI")

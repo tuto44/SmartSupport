@@ -2,3 +2,8 @@ backend/.env
 **/__pycache__/
 *.pyc
 .vscode/
+service_account.json
+*.exe
+ngrok.exe
+venv/
+backend/venv/
