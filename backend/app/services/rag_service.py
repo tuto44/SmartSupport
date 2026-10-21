@@ -228,7 +228,6 @@ class RagService:
                     "consulta en la documentación disponible. "
                     "Te recomiendo contactar al área de TI."
                 )
-
                 self.conversation.agregar_mensaje(
                     conversation_id=conversation_id,
                     user_id=user_id,
@@ -236,7 +235,6 @@ class RagService:
                     rol="user",
                     mensaje=mensaje_usuario_bd
                 )
-
                 self.conversation.agregar_mensaje(
                     conversation_id=conversation_id,
                     user_id=user_id,
@@ -244,7 +242,6 @@ class RagService:
                     rol="assistant",
                     mensaje=respuesta
                 )
-
                 return respuesta
 
         # 5. Construir prompt y mensaje multimodal
@@ -256,11 +253,11 @@ class RagService:
         )
 
         if image_base64:
-            if not image_base64.startswith("data:image"):
-                image_data_uri = f"data:image/jpeg;base64,{image_base64}"
-            else:
-                image_data_uri = image_base64
-
+            image_data_uri = (
+                image_base64
+                if image_base64.startswith("data:image")
+                else f"data:image/jpeg;base64,{image_base64}"
+            )
             contenido_mensaje = [
                 {"type": "text", "text": prompt},
                 {
@@ -272,7 +269,7 @@ class RagService:
         else:
             mensaje_llm = HumanMessage(content=prompt)
 
-        # 5. Generar respuesta con el LLM
+        # 6. Generar respuesta con el LLM
         respuesta_llm = self.llm.invoke([mensaje_llm])
         contenido = respuesta_llm.content
 

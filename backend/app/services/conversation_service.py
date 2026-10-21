@@ -99,23 +99,46 @@ class ConversationService:
         rol: str,
         mensaje: str
     ):
-        self.crear_conversacion(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            user_name=user_name,
-            title=(
-                mensaje[:30] + "..."
-                if rol == "user" and mensaje
-                else "Nueva conversación"
-            )
-        )
-
         connection = self.mysql.get_connection()
 
         try:
             cursor = connection.cursor()
 
-            sql = """
+            # 1. Asegurar o actualizar conversación en la misma conexión
+            title = (
+                mensaje[:30] + "..."
+                if rol == "user" and mensaje
+                else "Nueva conversación"
+            )
+
+            sql_conv = """
+                INSERT INTO conversations (
+                    id,
+                    user_id,
+                    user_name,
+                    title
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s
+                )
+                ON DUPLICATE KEY UPDATE
+                    updated_at = CURRENT_TIMESTAMP
+            """
+            cursor.execute(
+                sql_conv,
+                (
+                    conversation_id,
+                    user_id,
+                    user_name,
+                    title
+                )
+            )
+
+            # 2. Insertar mensaje en el historial
+            sql_msg = """
                 INSERT INTO chat_history (
                     conversation_id,
                     user_name,
@@ -129,9 +152,8 @@ class ConversationService:
                     %s
                 )
             """
-
             cursor.execute(
-                sql,
+                sql_msg,
                 (
                     conversation_id,
                     user_name,

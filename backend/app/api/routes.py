@@ -2,29 +2,21 @@ import base64
 import hashlib
 import os
 import time
-from pathlib import Path
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import service_account
 
-from app.models.chat_request import ChatRequest
+from app.config import (
+    CHAT_ACTION_URL,
+    SERVICE_ACCOUNT_FILE,
+    GOOGLE_CHAT_SCOPES
+)
 from app.services.rag_service import RagService
 
 router = APIRouter()
 rag_service = RagService()
 
-CHAT_ACTION_URL = os.getenv(
-    "CHAT_ACTION_URL",
-    "https://barrier-stammer-shush.ngrok-free.dev/api/google-chat"
-)
-
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-SERVICE_ACCOUNT_FILE = os.getenv(
-    "SERVICE_ACCOUNT_FILE",
-    str(BASE_DIR / "service_account.json")
-)
-GOOGLE_CHAT_SCOPES = ["https://www.googleapis.com/auth/chat.bot"]
 _cached_credentials: service_account.Credentials | None = None
 
 
@@ -156,52 +148,6 @@ async def enviar_mensaje_google_chat(
     except Exception as error:
         print(f"[GOOGLE CHAT API ERROR] Excepción al enviar mensaje: {error}")
         return False
-
-
-# ============================================================
-# CHAT WEB / API
-# ============================================================
-
-@router.post("/chat")
-async def chat(request: ChatRequest):
-    conversation_id = (
-        request.conversation_id
-        or f"web_{request.user_id or request.user_name}"
-    )
-    user_id = request.user_id or request.user_name
-    pregunta = (request.question or "").strip()
-
-    if pregunta.lower() in COMANDOS_RESET:
-        rag_service.conversation.eliminar_conversacion(conversation_id)
-        return {
-            "status": "success",
-            "answer": "🔄 Contexto reiniciado con éxito. ¿En qué nuevo tema o problema te puedo ayudar?",
-            "conversation_id": conversation_id,
-            "quick_replies": []
-        }
-
-    if not pregunta and request.image_base64:
-        pregunta = "Revisa la imagen adjunta y diagnostica el problema o error mostrado."
-    elif not pregunta:
-        raise HTTPException(
-            status_code=400,
-            detail="Debes proporcionar una pregunta o adjuntar una imagen."
-        )
-
-    respuesta = rag_service.responder(
-        conversation_id=conversation_id,
-        user_id=user_id,
-        user_name=request.user_name,
-        pregunta=pregunta,
-        image_base64=request.image_base64
-    )
-
-    return {
-        "status": "success",
-        "answer": respuesta,
-        "conversation_id": conversation_id,
-        "quick_replies": ["Sí", "No", "Cambiar tema"]
-    }
 
 
 # ============================================================
@@ -402,7 +348,7 @@ async def google_chat(request: Request):
                 thread_name=thread_name,
                 texto=msg_vacio,
                 token=token,
-                mostrar_botones=True
+                mostrar_botones=False
             )
         return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}} if es_click_boton else {}
 

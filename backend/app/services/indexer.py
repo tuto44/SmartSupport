@@ -31,12 +31,20 @@ class Indexer:
                 self.qdrant.eliminar_documento(documento.document_id)
             # Generar chunks
             self.chunk_service.generar_chunks(documento)
+
+            # Validar que se hayan generado chunks legibles
+            if not documento.chunks:
+                print(f"Advertencia: '{documento.nombre}' no contiene texto o chunks legibles. Se omite.")
+                continue
+
             # Generar embeddings
             self.embedding_service.generar_embeddings(documento)
+
             # Crear colección si aún no existe
-            if self.qdrant.vector_size is None:
+            if self.qdrant.vector_size is None and documento.chunks and documento.chunks[0].embedding:
                 vector_size = len(documento.chunks[0].embedding)
                 self.qdrant.crear_coleccion_si_no_existe(vector_size)
+
             # Guardar documento
             self.qdrant.guardar_documento(documento)
         print("\nINDEXACIÓN FINALIZADA.")

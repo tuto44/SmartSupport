@@ -46,4 +46,20 @@ MYSQL_USER = os.getenv("MYSQL_USER", "root")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
 
 
-INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "secret-key-default")
+# =========================
+# GOOGLE CHAT
+# =========================
+
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+CHAT_ACTION_URL = os.getenv(
+    "CHAT_ACTION_URL",
+    "https://barrier-stammer-shush.ngrok-free.dev/api/google-chat"
+)
+
+SERVICE_ACCOUNT_FILE = os.getenv(
+    "SERVICE_ACCOUNT_FILE",
+    os.path.join(BASE_DIR, "service_account.json")
+)
+
+GOOGLE_CHAT_SCOPES = ["https://www.googleapis.com/auth/chat.bot"]

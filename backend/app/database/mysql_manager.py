@@ -1,5 +1,5 @@
 import mysql.connector
-from mysql.connector import Error
+from mysql.connector import Error, pooling
 
 from app.config import (
     MYSQL_HOST,
@@ -11,6 +11,7 @@ from app.config import (
 
 
 class MySQLManager:
+    _pool: pooling.MySQLConnectionPool | None = None
 
     def __init__(self):
         self.config = {
@@ -20,11 +21,28 @@ class MySQLManager:
             "user": MYSQL_USER,
             "password": MYSQL_PASSWORD
         }
+        self._inicializar_pool()
+
+    def _inicializar_pool(self):
+        if MySQLManager._pool is None:
+            try:
+                MySQLManager._pool = pooling.MySQLConnectionPool(
+                    pool_name="smartsupport_pool",
+                    pool_size=5,
+                    pool_reset_session=True,
+                    **self.config
+                )
+            except Error as e:
+                print(f"Error inicializando Connection Pool de MySQL: {e}")
+                MySQLManager._pool = None
 
     def get_connection(self):
         try:
-            connection = mysql.connector.connect(**self.config)
+            if MySQLManager._pool:
+                return MySQLManager._pool.get_connection()
 
+            # Fallback en caso de que el pool no esté inicializado
+            connection = mysql.connector.connect(**self.config)
             if connection.is_connected():
                 return connection
 
