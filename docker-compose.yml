@@ -1,0 +1,83 @@
+services:
+  # Base de Datos MySQL
+  mysql:
+    image: mysql:8.0
+    container_name: SmartSupport_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-smartsupport}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - smartsupport_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_PASSWORD:-root_password}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Gestor de Base de Datos Web phpMyAdmin
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: SmartSupport_phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      UPLOAD_LIMIT: 64M
+    ports:
+      - "8080:80"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - smartsupport_net
+
+  # Base de Datos Vectorial Qdrant
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: SmartSupport_qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - smartsupport_net
+
+  # Backend FastAPI (Uvicorn)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: SmartSupport_backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - QDRANT_URL=http://qdrant:6333
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      mysql:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    networks:
+      - smartsupport_net
+
+networks:
+  smartsupport_net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  qdrant_data:
