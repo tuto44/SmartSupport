@@ -43,14 +43,14 @@ MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "smartsupport")
 MYSQL_USER = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "root_password")
 
 
 # =========================
 # GOOGLE CHAT
 # =========================
 
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 CHAT_ACTION_URL = os.getenv(
     "CHAT_ACTION_URL",

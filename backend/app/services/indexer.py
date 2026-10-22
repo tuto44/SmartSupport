@@ -16,35 +16,46 @@ class Indexer:
     def indexar_documentos(self):
         documentos = self.loader.cargar_documentos()
         print(f"\nSe encontraron {len(documentos)} documentos.\n")
+
+        if not documentos:
+            print("No se encontraron documentos en la carpeta configurada.")
+            return
+
+        # 1. Asegurar la colección antes de cualquier consulta o scroll
+        # gemini-embedding-001 utiliza vectores de 768 dimensiones
+        VECTOR_SIZE = 768
+        self.qdrant.crear_coleccion_si_no_existe(vector_size=VECTOR_SIZE)
+
         for documento in documentos:
             print("=" * 60)
             print(f"Procesando: {documento.nombre}")
-            # Calcular hash
+
+            # 2. Calcular hash del archivo en disco
             documento.hash_documento = calcular_hash(documento.ruta)
-            # Verificar si ya existe
+
+            # 3. Verificar si ya existe en Qdrant y si su contenido cambió
             existe = self.qdrant.obtener_documento(documento.document_id)
             if existe:
-                if existe["hash_documento"] == documento.hash_documento:
+                if existe.get("hash_documento") == documento.hash_documento:
                     print("El documento no cambió. Se omite.")
                     continue
-                print("El documento cambió. Actualizando...")
+                print("El documento cambió. Reemplazando chunks anteriores...")
                 self.qdrant.eliminar_documento(documento.document_id)
-            # Generar chunks
+
+            # 4. Dividir en chunks
             self.chunk_service.generar_chunks(documento)
 
-            # Validar que se hayan generado chunks legibles
+            # 5. Validar que tenga contenido procesable
             if not documento.chunks:
                 print(f"Advertencia: '{documento.nombre}' no contiene texto o chunks legibles. Se omite.")
                 continue
 
-            # Generar embeddings
+            # 6. Generar embeddings con Gemini
             self.embedding_service.generar_embeddings(documento)
 
-            # Crear colección si aún no existe
-            if self.qdrant.vector_size is None and documento.chunks and documento.chunks[0].embedding:
-                vector_size = len(documento.chunks[0].embedding)
-                self.qdrant.crear_coleccion_si_no_existe(vector_size)
-
-            # Guardar documento
+            # 7. Indexar en Qdrant
             self.qdrant.guardar_documento(documento)
-        print("\nINDEXACIÓN FINALIZADA.")
+
+        print("\n" + "=" * 60)
+        print("INDEXACIÓN FINALIZADA CON ÉXITO")
+        print("=" * 60)
