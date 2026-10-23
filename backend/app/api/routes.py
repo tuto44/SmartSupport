@@ -114,9 +114,6 @@ async def enviar_mensaje_google_chat(
     token: str,
     mostrar_botones: bool = True
 ) -> bool:
-    """Publica directamente el mensaje vía API REST.
-    En chats directos (DM) omite 'thread' para evitar crear hilos separados.
-    """
     url = f"https://chat.googleapis.com/v1/{space_name}/messages"
     headers = {
         "Authorization": f"Bearer {token}",
@@ -243,9 +240,9 @@ async def google_chat(request: Request):
 
     token = obtener_token_google_chat()
 
-    # --------------------------------------------------------
+
     # GESTIÓN DE ACCIONES DE BOTONES
-    # --------------------------------------------------------
+
     if es_click_boton:
         print(f"Evento de botón detectado. Función: {invoked_function}, Parámetros: {action_params}")
 
@@ -265,7 +262,7 @@ async def google_chat(request: Request):
                 )
             return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}}
 
-        # Botones de respuesta rápida (Sí / No)
+
         reply_val = action_params.get("reply") or action_params.get("value") or ""
         pregunta = str(reply_val).strip()
         print(f"Pregunta recibida desde botón: '{pregunta}'")
@@ -276,7 +273,6 @@ async def google_chat(request: Request):
             or ""
         ).strip()
 
-        # Comando de texto para reiniciar
         if pregunta.lower() in COMANDOS_RESET:
             print(f"Comando de reinicio detectado por texto para {conversation_id}.")
             rag_service.conversation.eliminar_conversacion(conversation_id)
@@ -292,9 +288,9 @@ async def google_chat(request: Request):
                 )
             return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}} if es_click_boton else {}
 
-    # --------------------------------------------------------
+
     # DESCARGA DE IMÁGENES AUTENTICADA
-    # --------------------------------------------------------
+
     image_base64 = None
     attachments = message.get("attachment") or message.get("attachments") or []
 
@@ -338,7 +334,7 @@ async def google_chat(request: Request):
     print(f"Space: {space_name}")
     print(f"Space type: {space_type}")
 
-    # Validación de contenido
+
     if not pregunta and not image_base64:
         msg_vacio = "No recibí ninguna pregunta ni imagen adjunta."
         if token and space_name:
@@ -355,9 +351,8 @@ async def google_chat(request: Request):
     if not pregunta and image_base64:
         pregunta = "Revisa la imagen adjunta y diagnostica el problema o error mostrado."
 
-    # --------------------------------------------------------
+
     # RAG + MYSQL + GEMINI
-    # --------------------------------------------------------
     respuesta = rag_service.responder(
         conversation_id=conversation_id,
         user_id=user_id,
@@ -370,9 +365,9 @@ async def google_chat(request: Request):
     print(respuesta)
     print("=" * 60)
 
-    # --------------------------------------------------------
+
     # PUBLICACIÓN DIRECTA EN GOOGLE CHAT
-    # --------------------------------------------------------
+
     if token and space_name:
         await enviar_mensaje_google_chat(
             space_name=space_name,
@@ -383,7 +378,6 @@ async def google_chat(request: Request):
             mostrar_botones=True
         )
 
-    # Si provino de un botón, confirmar acción; si fue texto/imagen, respuesta vacía
     if es_click_boton:
         return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}}
 

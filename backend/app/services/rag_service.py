@@ -98,7 +98,7 @@ class RagService:
         print(f"Usuario: {user_name} | ID: {conversation_id}")
         print(f"Pregunta: {pregunta}")
 
-        # 1. Asegurar la existencia de la conversación en BD ANTES de cualquier UPDATE
+        #Asegurar la existencia de la conversación en BD ANTES de cualquier UPDATE
         self.conversation.crear_conversacion(
             conversation_id=conversation_id,
             user_id=user_id,
@@ -106,7 +106,7 @@ class RagService:
             title=pregunta[:30] + ("..." if len(pregunta) > 30 else "")
         )
 
-        # 2. Análisis de imagen si existe
+        #Análisis de imagen si existe
         descripcion_imagen = ""
         if image_base64:
             descripcion_imagen = self.extraer_descripcion_imagen(image_base64)
@@ -117,13 +117,13 @@ class RagService:
             else f"[Imagen adjunta] {pregunta}".strip() if image_base64 else pregunta
         )
 
-        # 3. Historial y Estado guardado de la Conversación
+        #Historial y Estado guardado de la Conversación
         historial = self.conversation.obtener_historial(conversation_id=conversation_id, limite=8)
         estado_conv = self.conversation.obtener_estado_conversacion(conversation_id)
         root_issue = estado_conv.get("root_issue")
         last_context = estado_conv.get("last_context")
 
-        # 4. Manejo de saludos iniciales
+        #Manejo de saludos iniciales
         SALUDOS = {
             "hola", "buenas", "buen dia", "buen día", "buenos dias", "buenos días",
             "buenas tardes", "buenas noches", "hey", "saludos", "hola!", "que tal", "qué tal", "iniciar"
@@ -141,7 +141,7 @@ class RagService:
             self.conversation.agregar_mensaje(conversation_id, user_id, user_name, "assistant", respuesta_saludo)
             return respuesta_saludo
 
-        # 5. Detectar respuestas cortas o confirmaciones
+        #Detectar respuestas cortas o confirmaciones
         respuestas_seguimiento = {
             "si", "sí", "no", "ya", "ya lo hice", "listo", "no funcionó",
             "no me deja", "ok", "vale", "ya está", "ya termine", "ya terminé",
@@ -149,7 +149,7 @@ class RagService:
         }
         es_respuesta_corta = pregunta_limpia in respuestas_seguimiento or (len(pregunta.split()) <= 2 and bool(historial))
 
-        # 6. Establecer Objetivo Raíz si es el primer incidente técnico
+        #Establecer Objetivo Raíz si es el primer incidente técnico
         if not root_issue and not es_respuesta_corta and len(pregunta.split()) >= 3:
             root_issue = f"{pregunta} {descripcion_imagen}".strip()
             self.conversation.actualizar_estado_conversacion(
@@ -158,7 +158,7 @@ class RagService:
             )
             print(f"[RAG] Objetivo raíz establecido: {root_issue}")
 
-        # 7. Detectar si el usuario resolvió un bloqueo secundario
+        #Detectar si el usuario resolvió un bloqueo secundario
         frases_recuperacion = {
             "ya tengo internet", "ya cargo", "ya cargó", "ya navega",
             "ya volvio el internet", "ya volvió el internet", "ya conecto el wifi",
@@ -166,7 +166,7 @@ class RagService:
         }
         resolvio_bloqueo = any(frase in pregunta_limpia for frase in frases_recuperacion)
 
-        # 8. Formular la consulta para Qdrant
+        #Formular la consulta para Qdrant
         if resolvio_bloqueo and root_issue:
             print("[RAG] Detectada resolución de bloqueo. Retomando objetivo raíz...")
             consulta_busqueda = f"{root_issue} pasos solución"
@@ -177,12 +177,11 @@ class RagService:
         else:
             consulta_busqueda = pregunta
 
-        # 9. Recuperar Contexto Documental
+        #Recuperar Contexto Documental
         contexto = None
         if consulta_busqueda:
             contexto = self.recuperar_contexto(pregunta=consulta_busqueda)
 
-        # 10. Decisión del contexto activo con red de seguridad
         if contexto:
             self.conversation.actualizar_estado_conversacion(
                 conversation_id=conversation_id,
@@ -209,7 +208,7 @@ class RagService:
                 "Diagnostica el problema técnico analizando visualmente la imagen adjunta."
             )
 
-        # Si tras todos los intentos no hay contexto
+
         if not contexto:
             respuesta = (
                 "No encontré información relacionada con tu consulta en la documentación disponible. "
@@ -219,7 +218,7 @@ class RagService:
             self.conversation.agregar_mensaje(conversation_id, user_id, user_name, "assistant", respuesta)
             return respuesta
 
-        # 11. Construir Prompt Multimodal
+        #Construir Prompt Multimodal
         prompt = construir_prompt(
             usuario=user_name,
             pregunta=pregunta,
@@ -241,7 +240,7 @@ class RagService:
         else:
             mensaje_llm = HumanMessage(content=prompt)
 
-        # 12. Invocar Modelo
+        #Invocar Modelo
         respuesta_llm = self.llm.invoke([mensaje_llm])
         contenido = respuesta_llm.content
 

@@ -21,8 +21,8 @@ class Indexer:
             print("No se encontraron documentos en la carpeta configurada.")
             return
 
-        # 1. Asegurar la colección antes de cualquier consulta o scroll
-        # gemini-embedding-001 utiliza vectores de 768 dimensiones
+        Asegurar que la colección exista antes de cualquier consulta 
+
         VECTOR_SIZE = 768
         self.qdrant.crear_coleccion_si_no_existe(vector_size=VECTOR_SIZE)
 
@@ -30,7 +30,7 @@ class Indexer:
             print("=" * 60)
             print(f"Procesando: {documento.nombre}")
 
-            # 2. Calcular hash del archivo en disco
+            Calcular hash del archivo en disco
             documento.hash_documento = calcular_hash(documento.ruta)
 
             # 3. Verificar si ya existe en Qdrant y si su contenido cambió

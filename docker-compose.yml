@@ -51,7 +51,7 @@ services:
     networks:
       - smartsupport_net
 
-  # Backend FastAPI (Uvicorn)
+  # Backend FastAPI
   backend:
     build:
       context: ./backend
