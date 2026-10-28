@@ -1,10 +1,11 @@
-from app.loaders.document_loader import DocumentLoader
-from app.database.qdrant_manager import QdrantManager
-from app.services.chunk_service import ChunkService
-from app.services.embedding_service import EmbeddingService
-from app.utils.hash_utils import calcular_hash
+from app.services.indexer_service import IndexerService
 
+# Alias para compatibilidad hacia atrás
+Indexer = IndexerService
 
+<<<<<<< HEAD
+__all__ = ["Indexer", "IndexerService"]
+=======
 class Indexer:
 
     def __init__(self):
@@ -59,3 +60,4 @@ class Indexer:
         print("\n" + "=" * 60)
         print("INDEXACIÓN FINALIZADA CON ÉXITO")
         print("=" * 60)
+>>>>>>> e1f3567d4e4c94427970126258a497838f02029e

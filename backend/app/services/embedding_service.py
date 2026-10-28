@@ -1,11 +1,13 @@
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from app.config import EMBEDDING_MODEL
+from app.core.config import settings
 from app.models.document_file import DocumentFile
 
 class EmbeddingService:
     def __init__(self):
         self.embedding_model = GoogleGenerativeAIEmbeddings(
-            model=EMBEDDING_MODEL)
+            model=settings.EMBEDDING_MODEL,
+            google_api_key=settings.GOOGLE_API_KEY or None
+        )
         
     def generar_embeddings(self, documento: DocumentFile):
             print(f"Generando embeddings para: {documento.nombre}")

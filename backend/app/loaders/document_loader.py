@@ -3,16 +3,26 @@ from pathlib import Path
 from langchain_community.document_loaders import (TextLoader, PyPDFLoader)
 from app.models.document_file import DocumentFile
 from app.utils.hash_utils import generar_document_id
-from app.config import DOCUMENTS_FOLDER
+from app.core.config import settings
 
 class DocumentLoader:
     
     def __init__(self):
-        if os.path.exists(DOCUMENTS_FOLDER):
-            self.documents_folder = DOCUMENTS_FOLDER
-        else:
-            base_backend = Path(__file__).resolve().parent.parent.parent
-            self.documents_folder = str(base_backend / "documentos")
+        # Buscar en la carpeta configurada y si está vacía o no existe, verificar la raíz del proyecto
+        base_backend = Path(__file__).resolve().parent.parent.parent
+        root_dir = base_backend.parent
+        
+        candidatos = [
+            Path(settings.DOCUMENTS_FOLDER).resolve(),
+            base_backend / "documentos",
+            root_dir / "documentos"
+        ]
+        
+        self.documents_folder = str(base_backend / "documentos")
+        for ruta in candidatos:
+            if ruta.exists() and any(ruta.iterdir()):
+                self.documents_folder = str(ruta)
+                break
         
     def cargar_documentos(self):
         archivos = []

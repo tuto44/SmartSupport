@@ -1,36 +1,64 @@
+import asyncio
+import logging
+from typing import List, Optional
 from langchain_core.messages import HumanMessage
-from langchain_google_genai import (
-    ChatGoogleGenerativeAI,
-    GoogleGenerativeAIEmbeddings,
-)
-from app.config import (
-    CHAT_MODEL,
-    EMBEDDING_MODEL,
-    MIN_SIMILARITY_SCORE,
-    TOP_K_RESULTS,
-)
-from app.database.qdrant_manager import QdrantManager
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from app.core.config import settings
 from app.prompts.system_prompt import construir_prompt
-from app.services.conversation_service import ConversationService
+from app.repositories.interfaces.conversation_repository import IConversationRepository
+from app.repositories.interfaces.vector_repository import IVectorRepository
+
+logger = logging.getLogger(__name__)
+
+SALUDOS = {
+    "hola", "buenas", "buen dia", "buen día", "buenos dias", "buenos días",
+    "buenas tardes", "buenas noches", "hey", "saludos", "hola!", "que tal", "qué tal", "iniciar"
+}
+
+RESPUESTAS_SEGUIMIENTO = {
+    "si", "sí", "no", "ya", "ya lo hice", "listo", "no funcionó",
+    "no me deja", "ok", "vale", "ya está", "ya termine", "ya terminé",
+    "funciono", "funcionó", "siguiente", "continuar", "sigue igual"
+}
+
+FRASES_RECUPERACION = {
+    "ya tengo internet", "ya cargo", "ya cargó", "ya navega",
+    "ya volvio el internet", "ya volvió el internet", "ya conecto el wifi",
+    "ya tengo red", "ya dio ip", "ya conecto internet"
+}
 
 
 class RagService:
+    """
+    Servicio de orquestación de RAG, embeddings y generación multimodal con Gemini.
+    Desacoplado de frameworks web y controladores. Inyectado con repositorios abstractos.
+    """
 
-    def __init__(self):
-        self.qdrant = QdrantManager()
-        self.conversation = ConversationService()
-        self.embedding_model = GoogleGenerativeAIEmbeddings(
-            model=EMBEDDING_MODEL
+    def __init__(
+        self,
+        conversation_repo: IConversationRepository,
+        vector_repo: IVectorRepository,
+        embedding_model: Optional[GoogleGenerativeAIEmbeddings] = None,
+        llm: Optional[ChatGoogleGenerativeAI] = None
+    ):
+        self.conversation_repo = conversation_repo
+        self.vector_repo = vector_repo
+        self.embedding_model = embedding_model or GoogleGenerativeAIEmbeddings(
+            model=settings.EMBEDDING_MODEL,
+            google_api_key=settings.GOOGLE_API_KEY or None
         )
-        self.llm = ChatGoogleGenerativeAI(
-            model=CHAT_MODEL,
-            temperature=0.2
+        self.llm = llm or ChatGoogleGenerativeAI(
+            model=settings.CHAT_MODEL,
+            temperature=0.2,
+            google_api_key=settings.GOOGLE_API_KEY or None
         )
 
-    def generar_embedding(self, pregunta: str) -> list[float]:
-        return self.embedding_model.embed_query(pregunta)
+    async def generar_embedding(self, texto: str) -> List[float]:
+        """Genera vector de embeddings encapsulado en thread pool para evitar bloquear el event loop."""
+        return await asyncio.to_thread(self.embedding_model.embed_query, texto)
 
-    def extraer_descripcion_imagen(self, image_base64: str) -> str:
+    async def extraer_descripcion_imagen(self, image_base64: str) -> str:
+        """Extrae términos técnicos clave de la captura mediante LLM multimodal."""
         try:
             image_data_uri = (
                 image_base64
@@ -48,34 +76,39 @@ class RagService:
                     {"type": "image_url", "image_url": {"url": image_data_uri}}
                 ]
             )
-            res = self.llm.invoke([mensaje])
+            res = await asyncio.to_thread(self.llm.invoke, [mensaje])
             texto = res.content
             if isinstance(texto, list):
                 texto = "".join(b if isinstance(b, str) else b.get("text", "") for b in texto)
             descripcion = str(texto).strip()
-            print(f"[RAG] Términos técnicos extraídos de imagen: {descripcion}")
+            logger.info("[RAG] Términos técnicos extraídos de imagen: %s", descripcion)
             return descripcion
         except Exception as e:
-            print(f"[RAG AVISO] No se pudo analizar la imagen previamente: {e}")
+            logger.warning("[RAG AVISO] No se pudo analizar la imagen previamente: %s", e)
             return ""
 
-    def recuperar_contexto(
+    async def recuperar_contexto(
         self,
         pregunta: str,
-        limite: int = TOP_K_RESULTS
-    ) -> str | None:
-        print(f"[RAG] Búsqueda vectorial para: '{pregunta}'")
-        embedding = self.generar_embedding(pregunta)
-        resultados = self.qdrant.buscar_similares(embedding=embedding, limite=limite)
+        limite: int = settings.TOP_K_RESULTS
+    ) -> Optional[str]:
+        """Recupera fragmentos de manuales técnicos en la base vectorial con umbral de similitud."""
+        logger.info("[RAG] Búsqueda vectorial para: '%s'", pregunta)
+        embedding = await self.generar_embedding(pregunta)
+        resultados = await asyncio.to_thread(
+            self.vector_repo.buscar_similares, embedding, limite
+        )
 
         if not resultados:
             return None
 
         contexto = []
         for resultado in resultados:
-            if resultado.score < MIN_SIMILARITY_SCORE:
+            score = getattr(resultado, "score", 0.0)
+            if score < settings.MIN_SIMILARITY_SCORE:
                 continue
-            contenido = resultado.payload.get("page_content")
+            payload = getattr(resultado, "payload", {}) or {}
+            contenido = payload.get("page_content")
             if contenido:
                 contexto.append(contenido)
 
@@ -84,20 +117,27 @@ class RagService:
 
         return "\n\n".join(contexto)
 
-    def responder(
+    async def responder(
         self,
         conversation_id: str,
         user_id: str,
         user_name: str,
         pregunta: str,
-        image_base64: str | None = None
+        image_base64: Optional[str] = None
     ) -> str:
-        print("=" * 60)
-        print("NUEVA CONSULTA ENTRADA")
-        print("=" * 60)
-        print(f"Usuario: {user_name} | ID: {conversation_id}")
-        print(f"Pregunta: {pregunta}")
+        """
+        Orquesta el ciclo completo de RAG con Gemini y persistencia atómica.
+        """
+        logger.info("[RAG] Consulta recibida para usuario %s (%s): %s", user_name, conversation_id, pregunta)
 
+<<<<<<< HEAD
+        title = pregunta[:30] + ("..." if len(pregunta) > 30 else "")
+        await asyncio.to_thread(
+            self.conversation_repo.crear_o_actualizar_conversacion,
+            conversation_id, user_id, user_name, title
+        )
+
+=======
         #Asegurar la existencia de la conversación en BD ANTES de cualquier UPDATE
         self.conversation.crear_conversacion(
             conversation_id=conversation_id,
@@ -107,9 +147,10 @@ class RagService:
         )
 
         #Análisis de imagen si existe
+>>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         descripcion_imagen = ""
         if image_base64:
-            descripcion_imagen = self.extraer_descripcion_imagen(image_base64)
+            descripcion_imagen = await self.extraer_descripcion_imagen(image_base64)
 
         mensaje_usuario_bd = (
             f"[Imagen: {descripcion_imagen}] {pregunta}".strip()
@@ -117,6 +158,17 @@ class RagService:
             else f"[Imagen adjunta] {pregunta}".strip() if image_base64 else pregunta
         )
 
+<<<<<<< HEAD
+        historial = await asyncio.to_thread(
+            self.conversation_repo.obtener_historial, conversation_id, 8
+        )
+        estado_conv = await asyncio.to_thread(
+            self.conversation_repo.obtener_estado_conversacion, conversation_id
+        )
+        root_issue = estado_conv.root_issue
+        last_context = estado_conv.last_context
+
+=======
         #Historial y Estado guardado de la Conversación
         historial = self.conversation.obtener_historial(conversation_id=conversation_id, limite=8)
         estado_conv = self.conversation.obtener_estado_conversacion(conversation_id)
@@ -128,6 +180,7 @@ class RagService:
             "hola", "buenas", "buen dia", "buen día", "buenos dias", "buenos días",
             "buenas tardes", "buenas noches", "hey", "saludos", "hola!", "que tal", "qué tal", "iniciar"
         }
+>>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         pregunta_limpia = pregunta.strip().lower()
         pregunta_normalizada = "".join(c for c in pregunta_limpia if c.isalnum() or c.isspace()).strip()
 
@@ -137,10 +190,20 @@ class RagService:
                 "Soy tu Asistente Técnico de TI Nivel 1. ¿En qué problema, sistema o requerimiento "
                 "(VPN, WPass, Citrix, correo, accesos, impresoras) te puedo ayudar hoy?"
             )
-            self.conversation.agregar_mensaje(conversation_id, user_id, user_name, "user", pregunta)
-            self.conversation.agregar_mensaje(conversation_id, user_id, user_name, "assistant", respuesta_saludo)
+            await asyncio.to_thread(
+                self.conversation_repo.agregar_mensaje,
+                conversation_id, user_id, user_name, "user", pregunta
+            )
+            await asyncio.to_thread(
+                self.conversation_repo.agregar_mensaje,
+                conversation_id, user_id, user_name, "assistant", respuesta_saludo
+            )
             return respuesta_saludo
 
+<<<<<<< HEAD
+        es_respuesta_corta = pregunta_limpia in RESPUESTAS_SEGUIMIENTO or (len(pregunta.split()) <= 2 and bool(historial))
+
+=======
         #Detectar respuestas cortas o confirmaciones
         respuestas_seguimiento = {
             "si", "sí", "no", "ya", "ya lo hice", "listo", "no funcionó",
@@ -150,14 +213,19 @@ class RagService:
         es_respuesta_corta = pregunta_limpia in respuestas_seguimiento or (len(pregunta.split()) <= 2 and bool(historial))
 
         #Establecer Objetivo Raíz si es el primer incidente técnico
+>>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         if not root_issue and not es_respuesta_corta and len(pregunta.split()) >= 3:
             root_issue = f"{pregunta} {descripcion_imagen}".strip()
-            self.conversation.actualizar_estado_conversacion(
-                conversation_id=conversation_id,
-                root_issue=root_issue
+            await asyncio.to_thread(
+                self.conversation_repo.actualizar_estado_conversacion,
+                conversation_id, root_issue, None
             )
-            print(f"[RAG] Objetivo raíz establecido: {root_issue}")
+            logger.info("[RAG] Objetivo raíz establecido: %s", root_issue)
 
+<<<<<<< HEAD
+        resolvio_bloqueo = any(frase in pregunta_limpia for frase in FRASES_RECUPERACION)
+
+=======
         #Detectar si el usuario resolvió un bloqueo secundario
         frases_recuperacion = {
             "ya tengo internet", "ya cargo", "ya cargó", "ya navega",
@@ -167,40 +235,43 @@ class RagService:
         resolvio_bloqueo = any(frase in pregunta_limpia for frase in frases_recuperacion)
 
         #Formular la consulta para Qdrant
+>>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         if resolvio_bloqueo and root_issue:
-            print("[RAG] Detectada resolución de bloqueo. Retomando objetivo raíz...")
+            logger.info("[RAG] Detectada resolución de bloqueo. Retomando objetivo raíz...")
             consulta_busqueda = f"{root_issue} pasos solución"
         elif es_respuesta_corta:
-            consulta_busqueda = None  # No buscar palabras como "Sí" o "Listo" en Qdrant
+            consulta_busqueda = None
         elif descripcion_imagen:
             consulta_busqueda = f"{pregunta} {descripcion_imagen}".strip()
         else:
             consulta_busqueda = pregunta
 
+<<<<<<< HEAD
+=======
         #Recuperar Contexto Documental
+>>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         contexto = None
         if consulta_busqueda:
-            contexto = self.recuperar_contexto(pregunta=consulta_busqueda)
+            contexto = await self.recuperar_contexto(pregunta=consulta_busqueda)
 
         if contexto:
-            self.conversation.actualizar_estado_conversacion(
-                conversation_id=conversation_id,
-                last_context=contexto
+            await asyncio.to_thread(
+                self.conversation_repo.actualizar_estado_conversacion,
+                conversation_id, None, contexto
             )
         elif last_context:
-            print("[RAG] Reutilizando manual activo guardado en BD.")
+            logger.info("[RAG] Reutilizando manual activo guardado en BD.")
             contexto = last_context
         elif es_respuesta_corta and historial:
-            # RED DE SEGURIDAD: Si no había last_context pero hay historial, reconstruir desde la última pregunta
-            print("[RAG SEGURIDAD] Respuesta corta sin last_context en BD. Reconstruyendo desde historial...")
+            logger.info("[RAG SEGURIDAD] Reconstruyendo contexto desde historial...")
             mensajes_usuario_previos = [m["content"] for m in historial if m["role"] == "user"]
             if mensajes_usuario_previos:
                 consulta_recuperada = mensajes_usuario_previos[-1]
-                contexto = self.recuperar_contexto(pregunta=consulta_recuperada)
+                contexto = await self.recuperar_contexto(pregunta=consulta_recuperada)
                 if contexto:
-                    self.conversation.actualizar_estado_conversacion(
-                        conversation_id=conversation_id,
-                        last_context=contexto
+                    await asyncio.to_thread(
+                        self.conversation_repo.actualizar_estado_conversacion,
+                        conversation_id, None, contexto
                     )
         elif image_base64:
             contexto = (
@@ -208,17 +279,29 @@ class RagService:
                 "Diagnostica el problema técnico analizando visualmente la imagen adjunta."
             )
 
+<<<<<<< HEAD
+=======
 
+>>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         if not contexto:
-            respuesta = (
+            respuesta_sin_doc = (
                 "No encontré información relacionada con tu consulta en la documentación disponible. "
                 "Te recomiendo contactar al área de TI."
             )
-            self.conversation.agregar_mensaje(conversation_id, user_id, user_name, "user", mensaje_usuario_bd)
-            self.conversation.agregar_mensaje(conversation_id, user_id, user_name, "assistant", respuesta)
-            return respuesta
+            await asyncio.to_thread(
+                self.conversation_repo.agregar_mensaje,
+                conversation_id, user_id, user_name, "user", mensaje_usuario_bd
+            )
+            await asyncio.to_thread(
+                self.conversation_repo.agregar_mensaje,
+                conversation_id, user_id, user_name, "assistant", respuesta_sin_doc
+            )
+            return respuesta_sin_doc
 
+<<<<<<< HEAD
+=======
         #Construir Prompt Multimodal
+>>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         prompt = construir_prompt(
             usuario=user_name,
             pregunta=pregunta,
@@ -240,8 +323,12 @@ class RagService:
         else:
             mensaje_llm = HumanMessage(content=prompt)
 
+<<<<<<< HEAD
+        respuesta_llm = await asyncio.to_thread(self.llm.invoke, [mensaje_llm])
+=======
         #Invocar Modelo
         respuesta_llm = self.llm.invoke([mensaje_llm])
+>>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         contenido = respuesta_llm.content
 
         if isinstance(contenido, list):
@@ -250,9 +337,14 @@ class RagService:
         else:
             respuesta = str(contenido)
 
-        # 13. Persistir interacción en Base de Datos
-        self.conversation.agregar_mensaje(conversation_id, user_id, user_name, "user", mensaje_usuario_bd)
-        self.conversation.agregar_mensaje(conversation_id, user_id, user_name, "assistant", respuesta)
+        await asyncio.to_thread(
+            self.conversation_repo.agregar_mensaje,
+            conversation_id, user_id, user_name, "user", mensaje_usuario_bd
+        )
+        await asyncio.to_thread(
+            self.conversation_repo.agregar_mensaje,
+            conversation_id, user_id, user_name, "assistant", respuesta
+        )
 
-        print("[RAG] Respuesta de seguimiento generada y guardada exitosamente.")
+        logger.info("[RAG] Respuesta generada y guardada exitosamente.")
         return respuesta

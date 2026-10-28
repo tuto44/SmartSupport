@@ -4,6 +4,8 @@ backend/.env
 .vscode/
 **/service_account.json
 service_account.json
+**/smartsupport-512916-06c4920912ab.json
+smartsupport-512916-06c4920912ab.json
 *.exe
 ngrok.exe
 venv/

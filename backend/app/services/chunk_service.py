@@ -1,13 +1,13 @@
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from app.core.config import settings
 from app.models.document_file import DocumentFile
 from app.utils.hash_utils import generar_chunk_id
 from app.models.document_chunk import DocumentChunk
-from app.config import (CHUNK_SIZE,CHUNK_OVERLAP)
 
 class ChunkService:
     def __init__(self):
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+            chunk_size=settings.CHUNK_SIZE, chunk_overlap=settings.CHUNK_OVERLAP)
         
     def generar_chunks(self, documento):
         print(f"Generando chunks para: {documento.nombre}")
