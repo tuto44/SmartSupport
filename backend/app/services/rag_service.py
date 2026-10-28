@@ -130,24 +130,12 @@ class RagService:
         """
         logger.info("[RAG] Consulta recibida para usuario %s (%s): %s", user_name, conversation_id, pregunta)
 
-<<<<<<< HEAD
         title = pregunta[:30] + ("..." if len(pregunta) > 30 else "")
         await asyncio.to_thread(
             self.conversation_repo.crear_o_actualizar_conversacion,
             conversation_id, user_id, user_name, title
         )
 
-=======
-        #Asegurar la existencia de la conversación en BD ANTES de cualquier UPDATE
-        self.conversation.crear_conversacion(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            user_name=user_name,
-            title=pregunta[:30] + ("..." if len(pregunta) > 30 else "")
-        )
-
-        #Análisis de imagen si existe
->>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         descripcion_imagen = ""
         if image_base64:
             descripcion_imagen = await self.extraer_descripcion_imagen(image_base64)
@@ -158,7 +146,6 @@ class RagService:
             else f"[Imagen adjunta] {pregunta}".strip() if image_base64 else pregunta
         )
 
-<<<<<<< HEAD
         historial = await asyncio.to_thread(
             self.conversation_repo.obtener_historial, conversation_id, 8
         )
@@ -168,19 +155,6 @@ class RagService:
         root_issue = estado_conv.root_issue
         last_context = estado_conv.last_context
 
-=======
-        #Historial y Estado guardado de la Conversación
-        historial = self.conversation.obtener_historial(conversation_id=conversation_id, limite=8)
-        estado_conv = self.conversation.obtener_estado_conversacion(conversation_id)
-        root_issue = estado_conv.get("root_issue")
-        last_context = estado_conv.get("last_context")
-
-        #Manejo de saludos iniciales
-        SALUDOS = {
-            "hola", "buenas", "buen dia", "buen día", "buenos dias", "buenos días",
-            "buenas tardes", "buenas noches", "hey", "saludos", "hola!", "que tal", "qué tal", "iniciar"
-        }
->>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         pregunta_limpia = pregunta.strip().lower()
         pregunta_normalizada = "".join(c for c in pregunta_limpia if c.isalnum() or c.isspace()).strip()
 
@@ -200,20 +174,8 @@ class RagService:
             )
             return respuesta_saludo
 
-<<<<<<< HEAD
         es_respuesta_corta = pregunta_limpia in RESPUESTAS_SEGUIMIENTO or (len(pregunta.split()) <= 2 and bool(historial))
 
-=======
-        #Detectar respuestas cortas o confirmaciones
-        respuestas_seguimiento = {
-            "si", "sí", "no", "ya", "ya lo hice", "listo", "no funcionó",
-            "no me deja", "ok", "vale", "ya está", "ya termine", "ya terminé",
-            "funciono", "funcionó", "siguiente", "continuar", "sigue igual"
-        }
-        es_respuesta_corta = pregunta_limpia in respuestas_seguimiento or (len(pregunta.split()) <= 2 and bool(historial))
-
-        #Establecer Objetivo Raíz si es el primer incidente técnico
->>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         if not root_issue and not es_respuesta_corta and len(pregunta.split()) >= 3:
             root_issue = f"{pregunta} {descripcion_imagen}".strip()
             await asyncio.to_thread(
@@ -222,20 +184,8 @@ class RagService:
             )
             logger.info("[RAG] Objetivo raíz establecido: %s", root_issue)
 
-<<<<<<< HEAD
         resolvio_bloqueo = any(frase in pregunta_limpia for frase in FRASES_RECUPERACION)
 
-=======
-        #Detectar si el usuario resolvió un bloqueo secundario
-        frases_recuperacion = {
-            "ya tengo internet", "ya cargo", "ya cargó", "ya navega",
-            "ya volvio el internet", "ya volvió el internet", "ya conecto el wifi",
-            "ya tengo red", "ya dio ip", "ya conecto internet"
-        }
-        resolvio_bloqueo = any(frase in pregunta_limpia for frase in frases_recuperacion)
-
-        #Formular la consulta para Qdrant
->>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         if resolvio_bloqueo and root_issue:
             logger.info("[RAG] Detectada resolución de bloqueo. Retomando objetivo raíz...")
             consulta_busqueda = f"{root_issue} pasos solución"
@@ -246,10 +196,6 @@ class RagService:
         else:
             consulta_busqueda = pregunta
 
-<<<<<<< HEAD
-=======
-        #Recuperar Contexto Documental
->>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         contexto = None
         if consulta_busqueda:
             contexto = await self.recuperar_contexto(pregunta=consulta_busqueda)
@@ -279,10 +225,6 @@ class RagService:
                 "Diagnostica el problema técnico analizando visualmente la imagen adjunta."
             )
 
-<<<<<<< HEAD
-=======
-
->>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         if not contexto:
             respuesta_sin_doc = (
                 "No encontré información relacionada con tu consulta en la documentación disponible. "
@@ -298,10 +240,6 @@ class RagService:
             )
             return respuesta_sin_doc
 
-<<<<<<< HEAD
-=======
-        #Construir Prompt Multimodal
->>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         prompt = construir_prompt(
             usuario=user_name,
             pregunta=pregunta,
@@ -323,12 +261,7 @@ class RagService:
         else:
             mensaje_llm = HumanMessage(content=prompt)
 
-<<<<<<< HEAD
         respuesta_llm = await asyncio.to_thread(self.llm.invoke, [mensaje_llm])
-=======
-        #Invocar Modelo
-        respuesta_llm = self.llm.invoke([mensaje_llm])
->>>>>>> e1f3567d4e4c94427970126258a497838f02029e
         contenido = respuesta_llm.content
 
         if isinstance(contenido, list):
