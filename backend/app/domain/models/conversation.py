@@ -5,12 +5,14 @@ from typing import List
 
 @dataclass
 class ConversationState:
+    """Estado persistido de una conversación activa (objetivo raíz y contexto activo)."""
     root_issue: str | None = None
     last_context: str | None = None
 
 
 @dataclass
 class MessageDomain:
+    """Entidad de dominio que representa un mensaje individual del historial."""
     id: int | None = None
     conversation_id: str = ""
     user_name: str = ""
@@ -21,6 +23,7 @@ class MessageDomain:
 
 @dataclass
 class ConversationDomain:
+    """Entidad de dominio que representa una conversación completa con su historial."""
     id: str
     user_id: str
     user_name: str
@@ -31,26 +34,3 @@ class ConversationDomain:
     updated_at: datetime | None = None
     messages: List[MessageDomain] = field(default_factory=list)
 
-
-@dataclass
-class DocumentChunkDomain:
-    document: any
-    embedding: list[float] | None = None
-    chunk_index: int = 0
-    chunk_id: int | None = None
-    page: int | None = None
-    score: float | None = None
-
-
-@dataclass
-class DocumentFileDomain:
-    nombre: str
-    ruta: str
-    document_id: str | None = None
-    hash_documento: str | None = None
-    documentos: List[any] = field(default_factory=list)
-    chunks: List[DocumentChunkDomain] = field(default_factory=list)
-    metadata: dict = field(default_factory=dict)
-    embedding_count: int = 0
-    indexed_at: datetime | None = None
-    status: str = "pendiente"

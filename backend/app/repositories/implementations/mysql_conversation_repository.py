@@ -11,10 +11,20 @@ logger = logging.getLogger(__name__)
 
 
 class MySQLConversationRepository(IConversationRepository):
-    """Implementación de IConversationRepository utilizando SQLAlchemy 2.0 ORM."""
+    """
+    Implementación de IConversationRepository utilizando SQLAlchemy 2.0 ORM.
+
+    El commit/rollback es responsabilidad exclusiva del Unit of Work en get_db().
+    Este repositorio sólo opera con add(), execute() y flush() cuando se necesita
+    leer un ID autogenerado inmediatamente. No usa begin_nested().
+    """
 
     def __init__(self, session: Session):
         self._session = session
+
+    # ------------------------------------------------------------------ #
+    #  Mapeo ORM → Dominio                                                 #
+    # ------------------------------------------------------------------ #
 
     def _to_domain(self, model: ConversationModel) -> ConversationDomain:
         return ConversationDomain(
@@ -28,6 +38,10 @@ class MySQLConversationRepository(IConversationRepository):
             updated_at=model.updated_at
         )
 
+    # ------------------------------------------------------------------ #
+    #  Operaciones de Conversación                                         #
+    # ------------------------------------------------------------------ #
+
     def crear_o_actualizar_conversacion(
         self,
         conversation_id: str,
@@ -35,25 +49,27 @@ class MySQLConversationRepository(IConversationRepository):
         user_name: str,
         title: str = "Nueva conversación"
     ) -> ConversationDomain:
-        with self._session.begin_nested():
-            stmt = select(ConversationModel).where(ConversationModel.id == conversation_id)
-            conv = self._session.scalars(stmt).first()
-            if conv:
-                conv.updated_at = datetime.utcnow()
-                if user_name:
-                    conv.user_name = user_name
-            else:
-                conv = ConversationModel(
-                    id=conversation_id,
-                    user_id=user_id,
-                    user_name=user_name,
-                    title=title,
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
-                )
-                self._session.add(conv)
-            self._session.flush()
-            return self._to_domain(conv)
+        """Crea o actualiza la cabecera de conversación. Sin begin_nested: el commit lo gestiona get_db()."""
+        stmt = select(ConversationModel).where(ConversationModel.id == conversation_id)
+        conv = self._session.scalars(stmt).first()
+
+        if conv:
+            conv.updated_at = datetime.utcnow()
+            if user_name:
+                conv.user_name = user_name
+        else:
+            conv = ConversationModel(
+                id=conversation_id,
+                user_id=user_id,
+                user_name=user_name,
+                title=title,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            self._session.add(conv)
+            self._session.flush()  # Necesario para que el ORM resuelva la PK antes de retornar
+
+        return self._to_domain(conv)
 
     def obtener_conversacion(self, conversation_id: str) -> Optional[ConversationDomain]:
         stmt = select(ConversationModel).where(ConversationModel.id == conversation_id)
@@ -75,7 +91,8 @@ class MySQLConversationRepository(IConversationRepository):
         root_issue: Optional[str] = None,
         last_context: Optional[str] = None
     ) -> None:
-        values_to_update = {}
+        """Actualiza root_issue y/o last_context mediante ORM UPDATE. Sin begin_nested."""
+        values_to_update: dict = {}
         if root_issue is not None:
             values_to_update["root_issue"] = root_issue
         if last_context is not None:
@@ -86,14 +103,16 @@ class MySQLConversationRepository(IConversationRepository):
 
         values_to_update["updated_at"] = datetime.utcnow()
 
-        with self._session.begin_nested():
-            stmt = (
-                update(ConversationModel)
-                .where(ConversationModel.id == conversation_id)
-                .values(**values_to_update)
-            )
-            result = self._session.execute(stmt)
-            logger.info("[SQLAlchemy] Estado actualizado para %s (filas: %s)", conversation_id, result.rowcount)
+        stmt = (
+            update(ConversationModel)
+            .where(ConversationModel.id == conversation_id)
+            .values(**values_to_update)
+        )
+        result = self._session.execute(stmt)
+        logger.info(
+            "[REPOSITORIO] Estado actualizado para '%s' (filas afectadas: %s)",
+            conversation_id, result.rowcount
+        )
 
     def obtener_historial(
         self,
@@ -119,40 +138,43 @@ class MySQLConversationRepository(IConversationRepository):
         rol: str,
         mensaje: str
     ) -> None:
-        with self._session.begin_nested():
-            stmt_conv = select(ConversationModel).where(ConversationModel.id == conversation_id)
-            conv = self._session.scalars(stmt_conv).first()
+        """
+        Agrega un mensaje al historial y garantiza que la conversación padre exista.
+        Sin begin_nested: el commit lo gestiona el Unit of Work en get_db().
+        """
+        stmt_conv = select(ConversationModel).where(ConversationModel.id == conversation_id)
+        conv = self._session.scalars(stmt_conv).first()
 
-            title = (
-                mensaje[:30] + "..."
-                if rol == "user" and mensaje
-                else "Nueva conversación"
-            )
+        title = (
+            mensaje[:30] + "..."
+            if rol == "user" and mensaje
+            else "Nueva conversación"
+        )
 
-            if conv:
-                conv.updated_at = datetime.utcnow()
-                if user_name:
-                    conv.user_name = user_name
-            else:
-                conv = ConversationModel(
-                    id=conversation_id,
-                    user_id=user_id,
-                    user_name=user_name,
-                    title=title,
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
-                )
-                self._session.add(conv)
-
-            msg = ChatHistoryModel(
-                conversation_id=conversation_id,
+        if conv:
+            conv.updated_at = datetime.utcnow()
+            if user_name:
+                conv.user_name = user_name
+        else:
+            conv = ConversationModel(
+                id=conversation_id,
+                user_id=user_id,
                 user_name=user_name,
-                role=rol,
-                content=mensaje,
-                created_at=datetime.utcnow()
+                title=title,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
             )
-            self._session.add(msg)
-            self._session.flush()
+            self._session.add(conv)
+            self._session.flush()  # Resuelve FK antes de insertar el mensaje hijo
+
+        msg = ChatHistoryModel(
+            conversation_id=conversation_id,
+            user_name=user_name,
+            role=rol,
+            content=mensaje,
+            created_at=datetime.utcnow()
+        )
+        self._session.add(msg)
 
     def obtener_conversaciones(self, user_name: str) -> List[ConversationDomain]:
         stmt = (
@@ -164,10 +186,21 @@ class MySQLConversationRepository(IConversationRepository):
         return [self._to_domain(c) for c in results]
 
     def eliminar_conversacion(self, conversation_id: str) -> None:
-        with self._session.begin_nested():
-            stmt_chat = delete(ChatHistoryModel).where(ChatHistoryModel.conversation_id == conversation_id)
-            self._session.execute(stmt_chat)
+        """
+        Elimina el historial de chat y la conversación padre en cascada.
+        La FK con ondelete=CASCADE en el ORM es suficiente, pero hacemos
+        el DELETE explícito del hijo primero para mayor control.
+        """
+        stmt_chat = delete(ChatHistoryModel).where(
+            ChatHistoryModel.conversation_id == conversation_id
+        )
+        self._session.execute(stmt_chat)
 
-            stmt_conv = delete(ConversationModel).where(ConversationModel.id == conversation_id)
-            self._session.execute(stmt_conv)
-            logger.info("[SQLAlchemy] Conversación %s eliminada por reinicio de contexto.", conversation_id)
+        stmt_conv = delete(ConversationModel).where(
+            ConversationModel.id == conversation_id
+        )
+        self._session.execute(stmt_conv)
+        logger.info(
+            "[REPOSITORIO] Conversación '%s' eliminada con su historial asociado.",
+            conversation_id
+        )

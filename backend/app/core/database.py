@@ -1,5 +1,5 @@
 from typing import Generator
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from app.core.config import settings
 
@@ -23,10 +23,11 @@ Base = declarative_base()
 
 
 def get_db() -> Generator[Session, None, None]:
-    """Generador de sesiones para inyección de dependencias con rollback automático ante excepciones."""
+    """Generador de sesiones con commit al finalizar y rollback ante excepciones."""
     session = SessionLocal()
     try:
         yield session
+        session.commit()
     except Exception:
         session.rollback()
         raise
@@ -36,4 +37,6 @@ def get_db() -> Generator[Session, None, None]:
 
 def init_db() -> None:
     """Inicializa esquemas y tablas declarativas controladas por SQLAlchemy."""
+    # Importación explícita para registrar modelos en la metadata
+    import app.repositories.implementations.models_orm  # noqa: F401
     Base.metadata.create_all(bind=engine)
