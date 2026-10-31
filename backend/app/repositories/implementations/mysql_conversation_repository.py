@@ -11,6 +11,16 @@ logger = logging.getLogger(__name__)
 
 
 class MySQLConversationRepository(IConversationRepository):
+<<<<<<< HEAD
+=======
+    """
+    Implementación de IConversationRepository utilizando SQLAlchemy 2.0 ORM.
+
+    El commit/rollback es responsabilidad exclusiva del Unit of Work en get_db().
+    Este repositorio sólo opera con add(), execute() y flush() cuando se necesita
+    leer un ID autogenerado inmediatamente. No usa begin_nested().
+    """
+>>>>>>> 3654318b958771ff814308371aae93819033905b
 
     def __init__(self, session: Session):
         self._session = session

@@ -91,7 +91,11 @@ class RagService:
         user_name: str,
         pregunta: str,
         image_base64: Optional[str] = None
+<<<<<<< HEAD
     ) -> tuple[str, bool]:
+=======
+    ) -> str:
+>>>>>>> 3654318b958771ff814308371aae93819033905b
         """Orquesta el ciclo completo de RAG con Gemini y persistencia atómica."""
         logger.info(
             "[RAG] Consulta recibida — usuario: %s (%s): %s",
@@ -188,7 +192,11 @@ class RagService:
             contexto = last_context
         elif es_respuesta_corta and historial:
             logger.info("[RAG] Reconstruyendo contexto desde historial previo...")
+<<<<<<< HEAD
             mensajes_previos = [m.content for m in historial if m.role == "user"]
+=======
+            mensajes_previos = [m["content"] for m in historial if m["role"] == "user"]
+>>>>>>> 3654318b958771ff814308371aae93819033905b
             if mensajes_previos:
                 contexto = await self.recuperar_contexto(pregunta=mensajes_previos[-1])
                 if contexto:
@@ -239,4 +247,8 @@ class RagService:
         )
 
         logger.info("[RAG] Respuesta generada y persistida exitosamente.")
+<<<<<<< HEAD
         return respuesta, True
+=======
+        return respuesta
+>>>>>>> 3654318b958771ff814308371aae93819033905b
