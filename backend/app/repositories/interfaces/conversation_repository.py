@@ -42,7 +42,7 @@ class IConversationRepository(ABC):
         self,
         conversation_id: str,
         limite: int = 8
-    ) -> List[dict]:
+    ) -> List[MessageDomain]:
         """Obtiene el historial de mensajes ordenado cronológicamente."""
         pass
 

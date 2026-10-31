@@ -13,14 +13,11 @@ from app.services.google_chat_service import GoogleChatService
 from app.services.indexer_service import IndexerService
 
 # ------------------------------------------------------------------ #
-#  Singletons de infraestructura (sin estado por request)              #
+#  Singletons de infraestructura (perezosos / lazy)                    #
 # ------------------------------------------------------------------ #
-# Se instancian una sola vez al arrancar la app y se reúsan en cada
-# request. Son seguros en concurrencia porque no mututan estado.
-
-_vector_repository_instance: IVectorRepository = QdrantVectorRepository()
-_llm_service_instance: ILLMService = GeminiLLMService()
-_google_chat_service_instance: GoogleChatService = GoogleChatService()
+_vector_repository_instance: IVectorRepository | None = None
+_llm_service_instance: ILLMService | None = None
+_google_chat_service_instance: GoogleChatService | None = None
 
 
 # ------------------------------------------------------------------ #
@@ -38,17 +35,26 @@ def get_conversation_repository(
 
 
 def get_vector_repository() -> IVectorRepository:
-    """Provee el repositorio vectorial Qdrant (singleton por proceso)."""
+    """Provee el repositorio vectorial Qdrant aplicando lazy singleton."""
+    global _vector_repository_instance
+    if _vector_repository_instance is None:
+        _vector_repository_instance = QdrantVectorRepository()
     return _vector_repository_instance
 
 
 def get_llm_service() -> ILLMService:
-    """Provee GeminiLLMService (singleton por proceso). Sustituible por cualquier ILLMService."""
+    """Provee GeminiLLMService aplicando lazy singleton."""
+    global _llm_service_instance
+    if _llm_service_instance is None:
+        _llm_service_instance = GeminiLLMService()
     return _llm_service_instance
 
 
 def get_google_chat_service() -> GoogleChatService:
-    """Provee el servicio de integración con Google Chat."""
+    """Provee GoogleChatService aplicando lazy singleton."""
+    global _google_chat_service_instance
+    if _google_chat_service_instance is None:
+        _google_chat_service_instance = GoogleChatService()
     return _google_chat_service_instance
 
 

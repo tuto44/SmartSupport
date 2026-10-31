@@ -1,6 +1,6 @@
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from app.core.config import settings
-from app.models.document_file import DocumentFile
+from app.domain.models import DocumentFileDomain
 
 class EmbeddingService:
     def __init__(self):
@@ -9,7 +9,7 @@ class EmbeddingService:
             google_api_key=settings.GOOGLE_API_KEY or None
         )
         
-    def generar_embeddings(self, documento: DocumentFile):
+    def generar_embeddings(self, documento: DocumentFileDomain):
             print(f"Generando embeddings para: {documento.nombre}")
             if not documento.chunks:
                 print("El documento no tiene chunks.")

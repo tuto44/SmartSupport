@@ -91,7 +91,7 @@ class RagService:
         user_name: str,
         pregunta: str,
         image_base64: Optional[str] = None
-    ) -> str:
+    ) -> tuple[str, bool]:
         """Orquesta el ciclo completo de RAG con Gemini y persistencia atómica."""
         logger.info(
             "[RAG] Consulta recibida — usuario: %s (%s): %s",
@@ -145,7 +145,7 @@ class RagService:
                 self.conversation_repo.agregar_mensaje,
                 conversation_id, user_id, user_name, "assistant", respuesta_saludo
             )
-            return respuesta_saludo
+            return respuesta_saludo, False
 
         es_respuesta_corta = (
             pregunta_limpia in RESPUESTAS_SEGUIMIENTO
@@ -188,7 +188,7 @@ class RagService:
             contexto = last_context
         elif es_respuesta_corta and historial:
             logger.info("[RAG] Reconstruyendo contexto desde historial previo...")
-            mensajes_previos = [m["content"] for m in historial if m["role"] == "user"]
+            mensajes_previos = [m.content for m in historial if m.role == "user"]
             if mensajes_previos:
                 contexto = await self.recuperar_contexto(pregunta=mensajes_previos[-1])
                 if contexto:
@@ -216,7 +216,7 @@ class RagService:
                 self.conversation_repo.agregar_mensaje,
                 conversation_id, user_id, user_name, "assistant", respuesta_sin_doc
             )
-            return respuesta_sin_doc
+            return respuesta_sin_doc, False
 
         # — Construir prompt y generar respuesta —
         prompt = construir_prompt(
@@ -239,4 +239,4 @@ class RagService:
         )
 
         logger.info("[RAG] Respuesta generada y persistida exitosamente.")
-        return respuesta
+        return respuesta, True

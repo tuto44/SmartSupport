@@ -236,7 +236,7 @@ class GoogleChatService:
         if not pregunta and image_base64:
             pregunta = "Revisa la imagen adjunta y diagnostica el problema o error mostrado."
 
-        respuesta = await rag_service.responder(
+        respuesta, mostrar_botones = await rag_service.responder(
             conversation_id=conversation_id,
             user_id=user_id,
             user_name=user_name,
@@ -246,7 +246,7 @@ class GoogleChatService:
 
         await self.enviar_mensaje(
             space_name=space_name, space_type=space_type,
-            thread_name=thread_name, texto=respuesta, mostrar_botones=True
+            thread_name=thread_name, texto=respuesta, mostrar_botones=mostrar_botones
         )
 
         return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}} if is_button else {}

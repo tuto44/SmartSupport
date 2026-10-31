@@ -10,8 +10,8 @@ def construir_prompt(
     if historial:
         historial_texto = "Historial de la conversación:\n"
         for mensaje in historial:
-            rol = "Usuario" if mensaje["role"] == "user" else "Asistente"
-            historial_texto += f"{rol}: {mensaje['content']}\n"
+            rol = "Usuario" if mensaje.role == "user" else "Asistente"
+            historial_texto += f"{rol}: {mensaje.content}\n"
 
     info_root = f"Objetivo Principal del Usuario (Incidente Raíz): {root_issue}\n" if root_issue else ""
 

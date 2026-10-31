@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Optional
 from sqlalchemy import select, update, delete
 from sqlalchemy.orm import Session
-from app.domain.models import ConversationDomain, ConversationState
+from app.domain.models import ConversationDomain, ConversationState, MessageDomain
 from app.repositories.interfaces.conversation_repository import IConversationRepository
 from app.repositories.implementations.models_orm import ConversationModel, ChatHistoryModel
 
@@ -11,13 +11,6 @@ logger = logging.getLogger(__name__)
 
 
 class MySQLConversationRepository(IConversationRepository):
-    """
-    Implementación de IConversationRepository utilizando SQLAlchemy 2.0 ORM.
-
-    El commit/rollback es responsabilidad exclusiva del Unit of Work en get_db().
-    Este repositorio sólo opera con add(), execute() y flush() cuando se necesita
-    leer un ID autogenerado inmediatamente. No usa begin_nested().
-    """
 
     def __init__(self, session: Session):
         self._session = session
@@ -118,7 +111,7 @@ class MySQLConversationRepository(IConversationRepository):
         self,
         conversation_id: str,
         limite: int = 8
-    ) -> List[dict]:
+    ) -> List[MessageDomain]:
         stmt = (
             select(ChatHistoryModel.role, ChatHistoryModel.content)
             .where(ChatHistoryModel.conversation_id == conversation_id)
@@ -126,7 +119,7 @@ class MySQLConversationRepository(IConversationRepository):
             .limit(limite)
         )
         rows = self._session.execute(stmt).all()
-        mensajes = [{"role": r[0], "content": r[1]} for r in rows]
+        mensajes = [MessageDomain(role=r[0], content=r[1]) for r in rows]
         mensajes.reverse()
         return mensajes
 
