@@ -13,18 +13,11 @@ from app.services.google_chat_service import GoogleChatService
 from app.services.indexer_service import IndexerService
 
 # ------------------------------------------------------------------ #
-<<<<<<< HEAD
 #  Singletons de infraestructura (perezosos / lazy)                    #
 # ------------------------------------------------------------------ #
 _vector_repository_instance: IVectorRepository | None = None
 _llm_service_instance: ILLMService | None = None
 _google_chat_service_instance: GoogleChatService | None = None
-=======
-#  Singletons de infraestructura (sin estado por request)              #
-# ------------------------------------------------------------------ #
-# Se instancian una sola vez al arrancar la app y se reúsan en cada
-# request. Son seguros en concurrencia porque no mututan estado.
->>>>>>> 3654318b958771ff814308371aae93819033905b
 
 _vector_repository_instance: IVectorRepository = QdrantVectorRepository()
 _llm_service_instance: ILLMService = GeminiLLMService()
@@ -50,26 +43,18 @@ def get_conversation_repository(
 
 
 def get_vector_repository() -> IVectorRepository:
-<<<<<<< HEAD
     """Provee el repositorio vectorial Qdrant aplicando lazy singleton."""
     global _vector_repository_instance
     if _vector_repository_instance is None:
         _vector_repository_instance = QdrantVectorRepository()
-=======
-    """Provee el repositorio vectorial Qdrant (singleton por proceso)."""
->>>>>>> 3654318b958771ff814308371aae93819033905b
     return _vector_repository_instance
 
 
 def get_llm_service() -> ILLMService:
-<<<<<<< HEAD
     """Provee GeminiLLMService aplicando lazy singleton."""
     global _llm_service_instance
     if _llm_service_instance is None:
         _llm_service_instance = GeminiLLMService()
-=======
-    """Provee GeminiLLMService (singleton por proceso). Sustituible por cualquier ILLMService."""
->>>>>>> 3654318b958771ff814308371aae93819033905b
     return _llm_service_instance
 
 
