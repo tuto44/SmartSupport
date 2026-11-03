@@ -1,8 +1,11 @@
 import asyncio
+import logging
 import os
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import service_account
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 _cached_credentials: service_account.Credentials | None = None
 _credentials_lock = asyncio.Lock()
@@ -19,9 +22,10 @@ async def obtener_token_google_chat() -> str | None:
     if not os.path.exists(service_account_path):
         # Fallback para resolver la ruta tanto si se corre en Docker (/app/) como localmente
         candidatos = [
-            os.path.abspath(os.path.join(os.getcwd(), "service_account.json")),
             "/app/service_account.json",
+            os.path.abspath(os.path.join(os.getcwd(), "service_account.json")),
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "service_account.json")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "service_account.json")),
         ]
         encontrado = None
         for c in candidatos:
@@ -30,13 +34,16 @@ async def obtener_token_google_chat() -> str | None:
                 break
         if encontrado:
             service_account_path = encontrado
+            logger.info("[SECURITY] service_account.json resuelto en: %s", encontrado)
         else:
-            print(f"[SECURITY] Advertencia: Archivo '{service_account_path}' no encontrado.")
+            logger.warning(
+                "[SECURITY] Archivo service_account.json no encontrado. Probados: %s",
+                [settings.SERVICE_ACCOUNT_FILE] + candidatos
+            )
             return None
 
     async with _credentials_lock:
         try:
-            # Ejecutar operaciones síncronas de auth en un hilo separado
             def _refresh():
                 nonlocal service_account_path
                 global _cached_credentials
@@ -51,5 +58,5 @@ async def obtener_token_google_chat() -> str | None:
             token = await asyncio.to_thread(_refresh)
             return token
         except Exception as e:
-            print(f"[SECURITY ERROR] Error al generar token de Google Chat: {e}")
+            logger.error("[SECURITY ERROR] Error al generar token de Google Chat: %s", e, exc_info=True)
             return None

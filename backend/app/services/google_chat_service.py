@@ -22,7 +22,9 @@ class GoogleChatService:
     """
     Servicio de integración y orquestación para Google Chat:
     - Construcción de cards y botones interactivos V2.
-    - Envío asíncrono de mensajes y respuestas en hilos/espacios.
+    - Envío asíncrono de mensajes y respuestas en hilos/espacios (REST API).
+    - Respuesta síncrona en el body HTTP 200 como fallback de alta resiliencia.
+    - Gestión precisa de hilos (threads) en DMs vs Spaces.
     - Descarga autenticada de imágenes adjuntas.
     - Procesamiento desacoplado del webhook.
     """
@@ -103,14 +105,21 @@ class GoogleChatService:
     async def enviar_mensaje(
         self,
         space_name: str,
-        space_type: str,
-        thread_name: str,
+        thread_name: Optional[str],
         texto: str,
         mostrar_botones: bool = True
     ) -> bool:
+        """
+        Envía un mensaje a Google Chat vía REST API.
+        Si thread_name es provisto, responde dentro de ese hilo.
+        Si thread_name es None, publica en el flujo principal del chat.
+        """
         token = await obtener_token_google_chat()
+        if not token:
+            logger.warning("[GOOGLE CHAT] No se envió mensaje vía REST API: token OAuth ausente.")
+        if not space_name:
+            logger.warning("[GOOGLE CHAT] No se envió mensaje vía REST API: space_name ausente.")
         if not token or not space_name:
-            logger.warning("[GOOGLE CHAT] No se envió mensaje: token o space_name ausente.")
             return False
 
         url = f"https://chat.googleapis.com/v1/{space_name}/messages"
@@ -122,9 +131,8 @@ class GoogleChatService:
         payload: dict = {"text": texto}
         params: dict = {}
 
-        if space_type != "DM" and thread_name:
+        if thread_name:
             payload["thread"] = {"name": thread_name}
-            params["messageReplyOption"] = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
 
         if mostrar_botones:
             payload["cardsV2"] = self.construir_cards_v2()
@@ -133,7 +141,7 @@ class GoogleChatService:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.post(url, headers=headers, json=payload, params=params)
                 if resp.status_code == 200:
-                    logger.info("[GOOGLE CHAT] Mensaje publicado exitosamente en %s.", space_name)
+                    logger.info("[GOOGLE CHAT] Mensaje publicado exitosamente en %s (hilo=%s).", space_name, bool(thread_name))
                     return True
                 else:
                     logger.error("[GOOGLE CHAT ERROR] Status %d: %s", resp.status_code, resp.text)
@@ -197,14 +205,30 @@ class GoogleChatService:
         thread_name = event.get_thread_name()
         user_name = event.get_user_display_name()
         user_id = event.get_user_id()
+        is_dm = event.is_dm()
+        is_thread_reply = event.is_thread_reply()
         is_button = event.is_button_click()
         action_params = event.get_action_parameters()
         invoked_function = event.get_invoked_function()
 
+        is_in_thread = event.is_in_thread()
+
+        # Enrutamiento determinista de hilo:
+        # 1. Si el usuario está explícitamente dentro de un hilo secundario (message_id != thread_id),
+        #    respondemos dentro de ese hilo.
+        # 2. Si el usuario presionó un botón O está en el chat principal, target_thread = None.
+        #    Esto garantiza que la respuesta NUNCA cree un hilo y permanezca en el chat principal.
+        target_thread = thread_name if is_in_thread else None
+
+        logger.warning(
+            "[ENRUTAMIENTO HILO] is_button=%s, is_in_thread=%s, is_dm=%s -> target=%s",
+            is_button, is_in_thread, is_dm, target_thread or "CHAT_PRINCIPAL"
+        )
+
         conversation_id = self.calcular_conversation_id(
-            space_type=space_type,
+            space_type="DM" if is_dm else space_type,
             space_name=space_name,
-            thread_name=thread_name,
+            thread_name=target_thread or "",
             user_id=user_id
         )
 
@@ -217,20 +241,34 @@ class GoogleChatService:
         if is_reset_action or pregunta.lower() in COMANDOS_RESET:
             conversation_repo.eliminar_conversacion(conversation_id)
             msg_reset = "🔄 *Contexto reiniciado con éxito.*\n\n¿En qué nuevo tema, problema o requerimiento te puedo ayudar?"
-            await self.enviar_mensaje(
-                space_name=space_name, space_type=space_type,
-                thread_name=thread_name, texto=msg_reset, mostrar_botones=False
+            enviado = await self.enviar_mensaje(
+                space_name=space_name,
+                thread_name=target_thread,
+                texto=msg_reset,
+                mostrar_botones=False
             )
+            if not enviado:
+                payload_sync = {"text": msg_reset}
+                if target_thread:
+                    payload_sync["thread"] = {"name": target_thread}
+                return payload_sync
             return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}} if is_button else {}
 
         image_base64 = await self.descargar_imagen_adjunta(event)
 
         if not pregunta and not image_base64:
             msg_vacio = "No recibí ninguna pregunta ni imagen adjunta."
-            await self.enviar_mensaje(
-                space_name=space_name, space_type=space_type,
-                thread_name=thread_name, texto=msg_vacio, mostrar_botones=False
+            enviado = await self.enviar_mensaje(
+                space_name=space_name,
+                thread_name=target_thread,
+                texto=msg_vacio,
+                mostrar_botones=False
             )
+            if not enviado:
+                payload_sync = {"text": msg_vacio}
+                if target_thread:
+                    payload_sync["thread"] = {"name": target_thread}
+                return payload_sync
             return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}} if is_button else {}
 
         if not pregunta and image_base64:
@@ -244,9 +282,22 @@ class GoogleChatService:
             image_base64=image_base64
         )
 
-        await self.enviar_mensaje(
-            space_name=space_name, space_type=space_type,
-            thread_name=thread_name, texto=respuesta, mostrar_botones=mostrar_botones
+        enviado = await self.enviar_mensaje(
+            space_name=space_name,
+            thread_name=target_thread,
+            texto=respuesta,
+            mostrar_botones=mostrar_botones
         )
+
+        # Fallback síncrono: Si no se pudo enviar vía REST API (ej. problema de token o red),
+        # retornamos el mensaje en el cuerpo del HTTP 200 respetando el hilo correspondiente.
+        if not enviado:
+            logger.info("[GOOGLE CHAT] Enviando respuesta de forma síncrona en el body HTTP 200.")
+            payload_sync: dict = {"text": respuesta}
+            if target_thread:
+                payload_sync["thread"] = {"name": target_thread}
+            if mostrar_botones:
+                payload_sync["cardsV2"] = self.construir_cards_v2()
+            return payload_sync
 
         return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}} if is_button else {}

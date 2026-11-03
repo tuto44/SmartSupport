@@ -22,6 +22,13 @@ async def google_chat(
     conversation_repo: IConversationRepository = Depends(get_conversation_repository)
 ):
     """Endpoint delegador del webhook de Google Chat validado mediante DTO."""
+    space_name, space_type = event.get_space()
+    texto = event.get_text_content()
+    user = event.get_user_display_name()
+    logger.warning(
+        "[WEBHOOK DETECCIÓN] user='%s', space='%s', texto='%s'",
+        user, space_name, texto
+    )
     return await chat_service.procesar_evento_chat(
         event=event,
         rag_service=rag_service,
