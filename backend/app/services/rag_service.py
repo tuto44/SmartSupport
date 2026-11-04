@@ -27,6 +27,20 @@ FRASES_RECUPERACION = {
     "ya tengo red", "ya dio ip", "ya conecto internet"
 }
 
+# Expresiones que indican que el usuario confirmó el cierre exitoso del incidente.
+# Cuando se detectan, se limpia el estado y se retorna una despedida sin más pasos técnicos.
+FRASES_EXITO = {
+    "ya funcionó", "ya funciono", "ya sirvió", "ya sirvio",
+    "ya pude", "ya pude entrar", "ya quedó", "ya quedo",
+    "listo ya quedó", "listo ya quedo", "perfecto gracias",
+    "solucionado", "gracias funciono", "gracias funcionó",
+    "ya entré", "ya entre", "ya abre", "ya carga", "ya cargó",
+    "problema resuelto", "ya lo resolví", "ya lo resolvi",
+    "muchas gracias", "excelente gracias", "todo bien gracias",
+    "ya está resuelto", "ya esta resuelto", "listo gracias",
+    "ya se solucionó", "ya se soluciono", "ya quedó listo"
+}
+
 
 class RagService:
     """
@@ -58,7 +72,7 @@ class RagService:
         pregunta: str,
         limite: int = settings.TOP_K_RESULTS
     ) -> Optional[str]:
-        """Recupera fragmentos de manuales técnicos con umbral de similitud."""
+        """Recupera fragmentos de manuales técnicos con umbral de similitud estricto."""
         logger.info("[RAG] Búsqueda vectorial para: '%s'", pregunta)
         embedding = await self.llm_service.generar_embedding(pregunta)
         resultados = await asyncio.to_thread(
@@ -71,7 +85,13 @@ class RagService:
         contexto = []
         for resultado in resultados:
             score = getattr(resultado, "score", 0.0)
+            # Solo se incluyen fragmentos que superen el umbral MIN_SIMILARITY_SCORE (0.65).
+            # Fragmentos con score menor se descartan para evitar alucinaciones.
             if score < settings.MIN_SIMILARITY_SCORE:
+                logger.info(
+                    "[RAG] Fragmento descartado por similitud insuficiente: score=%.3f (umbral=%.2f)",
+                    score, settings.MIN_SIMILARITY_SCORE
+                )
                 continue
             payload = getattr(resultado, "payload", {}) or {}
             contenido = payload.get("page_content")
@@ -129,6 +149,31 @@ class RagService:
         pregunta_normalizada = "".join(
             c for c in pregunta_limpia if c.isalnum() or c.isspace()
         ).strip()
+
+        # — Detección de cierre exitoso de incidente (MÁXIMA PRIORIDAD) —
+        # Si el usuario confirma que el problema se resolvió, se limpia el estado
+        # y se retorna una despedida cordial sin más pasos técnicos (mostrar_botones=False).
+        if any(frase in pregunta_limpia for frase in FRASES_EXITO):
+            logger.info("[RAG] Cierre de incidente detectado para: %s", user_name)
+            despedida = (
+                f"¡Excelente, {user_name}! 🎉 Me alegra mucho que hayas podido resolver el problema. "
+                "Si en el futuro tienes otra consulta técnica, aquí estaré para ayudarte. "
+                "¡Que tengas un excelente día!"
+            )
+            # Limpiar estado de la conversación para no arrastrar contexto a futuras consultas
+            await asyncio.to_thread(
+                self.conversation_repo.actualizar_estado_conversacion,
+                conversation_id, None, None
+            )
+            await asyncio.to_thread(
+                self.conversation_repo.agregar_mensaje,
+                conversation_id, user_id, user_name, "user", pregunta
+            )
+            await asyncio.to_thread(
+                self.conversation_repo.agregar_mensaje,
+                conversation_id, user_id, user_name, "assistant", despedida
+            )
+            return despedida, False
 
         # — Saludo inicial —
         if pregunta_normalizada in SALUDOS and not historial:
@@ -202,11 +247,15 @@ class RagService:
                 "Diagnostica el problema técnico analizando visualmente la imagen adjunta."
             )
 
-        # — Sin contexto disponible —
+        # — Sin contexto disponible: derivación formal —
         if not contexto:
             respuesta_sin_doc = (
-                "No encontré información relacionada con tu consulta en la documentación disponible. "
-                "Te recomiendo contactar al área de TI."
+                "⚠️ No encontré un procedimiento específico para tu consulta en la base de conocimiento "
+                "oficial del Asistente TI.\n\n"
+                "Para obtener soporte especializado, te recomiendo:\n"
+                "1. 📋 Generar un ticket en **My Whirlpool** > *IT Service Catalog* > **Something's Broken**\n"
+                "2. 📞 Contactar a la **Mesa de Ayuda Nivel 2** directamente\n\n"
+                "Un agente de soporte especializado podrá asistirte con este requerimiento."
             )
             await asyncio.to_thread(
                 self.conversation_repo.agregar_mensaje,

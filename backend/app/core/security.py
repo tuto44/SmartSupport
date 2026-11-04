@@ -22,10 +22,10 @@ async def obtener_token_google_chat() -> str | None:
     if not os.path.exists(service_account_path):
         # Fallback para resolver la ruta tanto si se corre en Docker (/app/) como localmente
         candidatos = [
-            "/app/service_account.json",
-            os.path.abspath(os.path.join(os.getcwd(), "service_account.json")),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "service_account.json")),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "service_account.json")),
+            "/app/smartsupport-512916-06c4920912ab.json",
+            os.path.abspath(os.path.join(os.getcwd(), "smartsupport-512916-06c4920912ab.json")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "smartsupport-512916-06c4920912ab.json")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "smartsupport-512916-06c4920912ab.json")),
         ]
         encontrado = None
         for c in candidatos:

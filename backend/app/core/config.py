@@ -47,8 +47,8 @@ class Settings(BaseSettings):
         description="Número máximo de fragmentos a recuperar en similitud"
     )
     MIN_SIMILARITY_SCORE: float = Field(
-        default=0.60,
-        description="Umbral mínimo de similitud coseno"
+        default=0.65,
+        description="Umbral mínimo de similitud coseno (restrictivo para evitar fragmentos irrelevantes)"
     )
 
     # Documentación Técnica y Chunking
@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     )
     SERVICE_ACCOUNT_FILE: str = Field(
         default=os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "service_account.json")
+            os.path.join(os.path.dirname(__file__), "..", "..", "smartsupport-512916-06c4920912ab.json")
         ),
         description="Ruta absoluta al archivo de credenciales service_account.json"
     )
