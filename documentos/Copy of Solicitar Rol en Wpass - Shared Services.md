@@ -1,98 +1,33 @@
-Shared Services
+# Guía para Solicitar Rol en Wpass (Shared Services)
 
-Solicitar Rol en Wpass
+## 1. Ingreso al portal
+Ingrese al portal de Wpass utilizando el siguiente enlace: [https://access.whirlpool.com/wpass/wpass/](https://access.whirlpool.com/wpass/wpass/)
 
-Whirlpool Corporation - Conﬁdential
+## 2. Iniciar solicitud
+Diríjase a la sección **“Mi Acceso”** y haga clic en **“Solicitar Acceso”**.
 
-Enero  2019. By Keren Lozano
+## 3. Buscar el rol
+Busque el rol específico que necesita solicitar. *(Nota: Valide correctamente el nombre del rol a solicitar, no utilice roles de ejemplo)*.
 
-Solicitar Rol en Wpass
+## 4. Seleccionar tipo de rol
+Busque y seleccione la opción llamada **“Sap Individual Rol”**.
 
-1
+## 5. Añadir a la cesta
+Busque el ambiente en el cual requiere el acceso y haga clic en **“añadir a la cesta”**.
 
-Ingresar al portal de Wpass con la siguiente liga:
-https://access.whirlpool.com/wpass/wpass/
+## 6. Revisar el carro
+Diríjase a la sección **“Carro”** y haga clic en **“Revisa”**.
 
-Whirlpool Corporation - Conﬁdential
+## 7. Justificación de la solicitud
+Ingrese una justificación clara para pedir el rol. 
 
-Solicitar Rol en Wpass
+## 8. Gestión de aprobaciones (Seguimiento)
+Una vez realizada la solicitud, anote el número de seguimiento señalado en pantalla. El flujo de aprobación es el siguiente:
+- Pida a su *People Leader* (PL) que apruebe la solicitud en primer nivel.
+- Una vez aprobado por el PL, pida al *Role Owner* que realice la aprobación final.
 
-2
+## 9. Monitorear estatus
+Para revisar el estatus de su solicitud, vaya al menú **“Mi Acceso”** y después seleccione **“Mis Solicitudes”**.
 
-Ir a “Mi Acceso” y dar Click en “Solicitar Acceso”
-
-Whirlpool Corporation - Conﬁdential
-
-Solicitar Rol en Wpass
-
-3
-
-Buscar el rol a solicitar
-*Imagen y rol solo como ejemplo
-
-Whirlpool Corporation - Conﬁdential
-
-Solicitar Rol en Wpass
-
-4
-
-Buscar la opción llamada “Sap Individual Rol”
-
-Whirlpool Corporation - Conﬁdential
-
-Solicitar Rol en Wpass
-
-5
-
-Buscar el ambiente en el cual se requiere el acceso y “añadir a la cesta”:
-
-Whirlpool Corporation - Conﬁdential
-
-Solicitar Rol en Wpass
-
-6
-
-Ir a “Carro” y dar click en “Revisa”
-
-1 →
-
-2 →
-
-Whirlpool Corporation - Conﬁdential
-
-Solicitar Rol en Wpass
-
-7
-
-Ingresar una Justiﬁcación para pedir el rol. Si el role owner es angloparlante, escribirlo en inglés, y dar click en
-“Revisa”:
-
-Whirlpool Corporation - Conﬁdential
-
-Solicitar Rol en Wpass
-
-8
-
-Realizar seguimiento en Wpass:
-Una vez realizada la solicitud, pedir a tu people leader que apruebe (primer nivel) y una vez aprobado por PL,
-pedir a role owner que apruebe. Dar seguimiento con el número señalado:
-
-Whirlpool Corporation - Conﬁdential
-
-Solicitar Rol en Wpass
-
-9
-
-Para revisar el estatus de la solicitud, ir a “Mi Acceso” y después a “Mis Solicitudes”
-
-Whirlpool Corporation - Conﬁdential
-
-Solicitar Rol en Wpass
-
-10
-
-Filtrar por el día que realizaste la solicitud. Una vez que el people leader y el role owner aprobaron tu solicitud,
-el progreso debe estar completamente en color verde:
-
-Whirlpool Corporation - Conﬁdential
-
+## 10. Validación de éxito
+Filtre la vista por el día en que realizó la solicitud. Podrá confirmar que el trámite finalizó exitosamente cuando el *People Leader* y el *Role Owner* aprueben y la barra de progreso se muestre completamente en color verde.
