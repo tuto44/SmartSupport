@@ -53,7 +53,7 @@ class Settings(BaseSettings):
 
     # Documentación Técnica y Chunking
     DOCUMENTS_FOLDER: str = Field(
-        default="./documentos",
+        default="../documentos",
         description="Directorio de manuales técnicos para indexación"
     )
     CHUNK_SIZE: int = Field(
