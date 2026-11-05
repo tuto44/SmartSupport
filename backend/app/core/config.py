@@ -29,6 +29,16 @@ class Settings(BaseSettings):
         description="Identificador del modelo para generación de embeddings"
     )
 
+    # Resiliencia y Control de Timeouts
+    REQUEST_TIMEOUT_SECONDS: float = Field(
+        default=18.0,
+        description="Límite máximo de espera antes del timeout de Google Chat"
+    )
+    MAX_RETRIES_LLM: int = Field(
+        default=2,
+        description="Número máximo de reintentos para llamadas al LLM ante fallos transitorios"
+    )
+
     # Qdrant Vector Database
     QDRANT_URL: str = Field(
         default="http://localhost:6333",

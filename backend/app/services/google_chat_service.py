@@ -21,7 +21,7 @@ COMANDOS_RESET = {
 class GoogleChatService:
     """
     Servicio de integración y orquestación para Google Chat:
-    - Construcción de cards y botones interactivos V2.
+    - Construcción dinámica de cards y botones interactivos V2 (Sí/No condicionales y Cambiar tema persistente).
     - Envío asíncrono de mensajes y respuestas en hilos/espacios (REST API).
     - Respuesta síncrona en el body HTTP 200 como fallback de alta resiliencia.
     - Gestión precisa de hilos (threads) en DMs vs Spaces.
@@ -44,7 +44,60 @@ class GoogleChatService:
             return f"gchat_user_{user_id}"
 
     @staticmethod
-    def construir_cards_v2() -> list:
+    def construir_cards_v2(mostrar_sino: bool = True, mostrar_cambiar_tema: bool = True) -> list:
+        """
+        Construye tarjetas de botones interactivas en base a la necesidad de la respuesta:
+        - Si mostrar_sino=True: incluye [✅ Sí], [❌ No] y [🔄 Cambiar tema].
+        - Si mostrar_sino=False y mostrar_cambiar_tema=True: incluye ÚNICAMENTE [🔄 Cambiar tema].
+        - Si ambos son False: retorna lista vacía.
+        """
+        botones = []
+
+        if mostrar_sino:
+            botones.extend([
+                {
+                    "text": "✅ Sí",
+                    "onClick": {
+                        "action": {
+                            "function": settings.CHAT_ACTION_URL,
+                            "parameters": [
+                                {"key": "action", "value": "quick_reply"},
+                                {"key": "reply", "value": "Sí"}
+                            ]
+                        }
+                    }
+                },
+                {
+                    "text": "❌ No",
+                    "onClick": {
+                        "action": {
+                            "function": settings.CHAT_ACTION_URL,
+                            "parameters": [
+                                {"key": "action", "value": "quick_reply"},
+                                {"key": "reply", "value": "No"}
+                            ]
+                        }
+                    }
+                }
+            ])
+
+        if mostrar_cambiar_tema:
+            botones.append({
+                "text": "🔄 Cambiar tema",
+                "onClick": {
+                    "action": {
+                        "function": settings.CHAT_ACTION_URL,
+                        "parameters": [
+                            {"key": "action", "value": "reset"},
+                            {"key": "reply", "value": "Cambiar tema"}
+                        ]
+                    }
+                }
+            })
+
+        if not botones:
+            return []
+
         unique_card_id = f"actions_{int(time.time() * 1000)}"
         return [
             {
@@ -55,44 +108,7 @@ class GoogleChatService:
                             "widgets": [
                                 {
                                     "buttonList": {
-                                        "buttons": [
-                                            {
-                                                "text": "✅ Sí",
-                                                "onClick": {
-                                                    "action": {
-                                                        "function": settings.CHAT_ACTION_URL,
-                                                        "parameters": [
-                                                            {"key": "action", "value": "quick_reply"},
-                                                            {"key": "reply", "value": "Sí"}
-                                                        ]
-                                                    }
-                                                }
-                                            },
-                                            {
-                                                "text": "❌ No",
-                                                "onClick": {
-                                                    "action": {
-                                                        "function": settings.CHAT_ACTION_URL,
-                                                        "parameters": [
-                                                            {"key": "action", "value": "quick_reply"},
-                                                            {"key": "reply", "value": "No"}
-                                                        ]
-                                                    }
-                                                }
-                                            },
-                                            {
-                                                "text": "🔄 Cambiar tema",
-                                                "onClick": {
-                                                    "action": {
-                                                        "function": settings.CHAT_ACTION_URL,
-                                                        "parameters": [
-                                                            {"key": "action", "value": "reset"},
-                                                            {"key": "reply", "value": "Cambiar tema"}
-                                                        ]
-                                                    }
-                                                }
-                                            }
-                                        ]
+                                        "buttons": botones
                                     }
                                 }
                             ]
@@ -107,7 +123,8 @@ class GoogleChatService:
         space_name: str,
         thread_name: Optional[str],
         texto: str,
-        mostrar_botones: bool = True
+        mostrar_sino: bool = False,
+        mostrar_cambiar_tema: bool = False
     ) -> bool:
         """
         Envía un mensaje a Google Chat vía REST API.
@@ -134,11 +151,15 @@ class GoogleChatService:
         if thread_name:
             payload["thread"] = {"name": thread_name}
 
-        if mostrar_botones:
-            payload["cardsV2"] = self.construir_cards_v2()
+        cards = self.construir_cards_v2(
+            mostrar_sino=mostrar_sino,
+            mostrar_cambiar_tema=mostrar_cambiar_tema
+        )
+        if cards:
+            payload["cardsV2"] = cards
 
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(url, headers=headers, json=payload, params=params)
                 if resp.status_code == 200:
                     logger.info("[GOOGLE CHAT] Mensaje publicado exitosamente en %s (hilo=%s).", space_name, bool(thread_name))
@@ -181,7 +202,7 @@ class GoogleChatService:
 
                 try:
                     logger.info("[GOOGLE CHAT] Descargando imagen: %s", resource_name)
-                    async with httpx.AsyncClient(timeout=25.0) as client:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
                         response = await client.get(download_url, headers=headers)
                         if response.status_code == 200:
                             raw_b64 = base64.b64encode(response.content).decode("utf-8")
@@ -200,13 +221,13 @@ class GoogleChatService:
     ) -> Dict[str, Any]:
         """
         Orquesta el ciclo de recepción y respuesta para el evento de Google Chat.
+        Garantiza una respuesta rápida y resiliencia ante cualquier excepción.
         """
         space_name, space_type = event.get_space()
         thread_name = event.get_thread_name()
         user_name = event.get_user_display_name()
         user_id = event.get_user_id()
         is_dm = event.is_dm()
-        is_thread_reply = event.is_thread_reply()
         is_button = event.is_button_click()
         action_params = event.get_action_parameters()
         invoked_function = event.get_invoked_function()
@@ -214,13 +235,11 @@ class GoogleChatService:
         is_in_thread = event.is_in_thread()
 
         # Enrutamiento determinista de hilo:
-        # 1. Si el usuario está explícitamente dentro de un hilo secundario (message_id != thread_id),
-        #    respondemos dentro de ese hilo.
+        # 1. Si el usuario está explícitamente dentro de un hilo secundario, target_thread = thread_name.
         # 2. Si el usuario presionó un botón O está en el chat principal, target_thread = None.
-        #    Esto garantiza que la respuesta NUNCA cree un hilo y permanezca en el chat principal.
         target_thread = thread_name if is_in_thread else None
 
-        logger.warning(
+        logger.info(
             "[ENRUTAMIENTO HILO] is_button=%s, is_in_thread=%s, is_dm=%s -> target=%s",
             is_button, is_in_thread, is_dm, target_thread or "CHAT_PRINCIPAL"
         )
@@ -238,14 +257,16 @@ class GoogleChatService:
         )
         pregunta = action_params.get("reply") or action_params.get("value") or event.get_text_content()
 
-        if is_reset_action or pregunta.lower() in COMANDOS_RESET:
+        # Caso: Reinicio de conversación / Cambiar tema
+        if is_reset_action or (pregunta and pregunta.lower() in COMANDOS_RESET):
             conversation_repo.eliminar_conversacion(conversation_id)
             msg_reset = "🔄 *Contexto reiniciado con éxito.*\n\n¿En qué nuevo tema, problema o requerimiento te puedo ayudar?"
             enviado = await self.enviar_mensaje(
                 space_name=space_name,
                 thread_name=target_thread,
                 texto=msg_reset,
-                mostrar_botones=False
+                mostrar_sino=False,
+                mostrar_cambiar_tema=False
             )
             if not enviado:
                 payload_sync = {"text": msg_reset}
@@ -256,25 +277,31 @@ class GoogleChatService:
 
         image_base64 = await self.descargar_imagen_adjunta(event)
 
+        # Caso: Sin mensaje ni adjunto
         if not pregunta and not image_base64:
             msg_vacio = "No recibí ninguna pregunta ni imagen adjunta."
             enviado = await self.enviar_mensaje(
                 space_name=space_name,
                 thread_name=target_thread,
                 texto=msg_vacio,
-                mostrar_botones=False
+                mostrar_sino=False,
+                mostrar_cambiar_tema=True
             )
             if not enviado:
                 payload_sync = {"text": msg_vacio}
                 if target_thread:
                     payload_sync["thread"] = {"name": target_thread}
+                cards = self.construir_cards_v2(mostrar_sino=False, mostrar_cambiar_tema=True)
+                if cards:
+                    payload_sync["cardsV2"] = cards
                 return payload_sync
             return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}} if is_button else {}
 
         if not pregunta and image_base64:
             pregunta = "Revisa la imagen adjunta y diagnostica el problema o error mostrado."
 
-        respuesta, mostrar_botones = await rag_service.responder(
+        # Procesamiento RAG
+        respuesta, mostrar_sino, mostrar_cambiar_tema = await rag_service.responder(
             conversation_id=conversation_id,
             user_id=user_id,
             user_name=user_name,
@@ -286,18 +313,23 @@ class GoogleChatService:
             space_name=space_name,
             thread_name=target_thread,
             texto=respuesta,
-            mostrar_botones=mostrar_botones
+            mostrar_sino=mostrar_sino,
+            mostrar_cambiar_tema=mostrar_cambiar_tema
         )
 
         # Fallback síncrono: Si no se pudo enviar vía REST API (ej. problema de token o red),
         # retornamos el mensaje en el cuerpo del HTTP 200 respetando el hilo correspondiente.
         if not enviado:
             logger.info("[GOOGLE CHAT] Enviando respuesta de forma síncrona en el body HTTP 200.")
-            payload_sync: dict = {"text": respuesta}
+            payload_sync = {"text": respuesta}
             if target_thread:
                 payload_sync["thread"] = {"name": target_thread}
-            if mostrar_botones:
-                payload_sync["cardsV2"] = self.construir_cards_v2()
+            cards = self.construir_cards_v2(
+                mostrar_sino=mostrar_sino,
+                mostrar_cambiar_tema=mostrar_cambiar_tema
+            )
+            if cards:
+                payload_sync["cardsV2"] = cards
             return payload_sync
 
         return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}} if is_button else {}

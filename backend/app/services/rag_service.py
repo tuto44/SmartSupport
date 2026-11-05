@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from typing import List, Optional
 
 from app.prompts.system_prompt import construir_prompt
@@ -41,6 +42,25 @@ FRASES_EXITO = {
     "ya se solucionó", "ya se soluciono", "ya quedó listo"
 }
 
+# Patrones para clasificar preguntas abiertas (no deben mostrar botones Sí / No)
+PATRONES_PREGUNTAS_ABIERTAS = [
+    r"¿?\s*qué\b", r"¿?\s*que\b", r"¿?\s*cuál\b", r"¿?\s*cual\b",
+    r"¿?\s*cuáles\b", r"¿?\s*cuales\b", r"¿?\s*cómo\b", r"¿?\s*como\b",
+    r"¿?\s*dónde\b", r"¿?\s*donde\b", r"¿?\s*por\s+qué\b", r"¿?\s*por\s+que\b",
+    r"¿?\s*cuándo\b", r"¿?\s*cuando\b", r"¿?\s*quién\b", r"¿?\s*quien\b",
+    r"\bdescribe\b", r"\bingresa\b", r"\bindica\b", r"\bescribe\b"
+]
+
+# Patrones para clasificar preguntas cerradas que esperan confirmación binaria (Sí / No)
+PATRONES_PREGUNTAS_CERRADAS = [
+    r"¿?\s*lograste", r"¿?\s*pudiste", r"¿?\s*te\s+funcion[oó]", r"¿?\s*te\s+sirvi[oó]",
+    r"¿?\s*te\s+aparece", r"¿?\s*se\s+muestra", r"¿?\s*lo\s+visualizas", r"¿?\s*la\s+visualizas",
+    r"¿?\s*ya\s+carg[oó]", r"¿?\s*ya\s+conect[oó]", r"¿?\s*contin[uú]a\s+el\s+error",
+    r"¿?\s*persiste\s+la\s+falla", r"¿?\s*persiste\s+el\s+error", r"¿?\s*persiste\s+el\s+problema",
+    r"¿?\s*deseas\s+que\s+te\s+gu[ií]e", r"¿?\s*quieres\s+intentar", r"¿?\s*funcion[oó]",
+    r"¿?\s*pudiste\s+ingresar", r"¿?\s*lograste\s+entrar", r"¿?\s*se\s+solucion[oó]"
+]
+
 
 class RagService:
     """
@@ -62,6 +82,51 @@ class RagService:
         self.conversation_repo = conversation_repo
         self.vector_repo = vector_repo
         self.llm_service = llm_service
+
+    # ------------------------------------------------------------------ #
+    #  Evaluación de Pregunta Cerrada vs Abierta                          #
+    # ------------------------------------------------------------------ #
+
+    def evaluar_requiere_sino(self, texto_respuesta: str) -> bool:
+        """
+        Determina si el cierre o la última oración de la respuesta contiene una
+        pregunta cerrada de verificación/confirmación que deba presentar botones Sí/No.
+
+        Si es pregunta abierta (¿Qué, Cómo, Cuál, etc.) o informativa, retorna False.
+        """
+        if not texto_respuesta or not texto_respuesta.strip():
+            return False
+
+        # Extraer las últimas oraciones/líneas relevantes del mensaje
+        lineas = [line.strip() for line in texto_respuesta.strip().split("\n") if line.strip()]
+        if not lineas:
+            return False
+
+        # Tomar la última porción o encontrar la última pregunta (entre ¿ y ?)
+        ultimo_tramo = lineas[-1].lower()
+        coincidencias_preguntas = re.findall(r"¿([^?]+)\?", texto_respuesta.lower())
+        ultima_pregunta = coincidencias_preguntas[-1] if coincidencias_preguntas else ultimo_tramo
+
+        # 1. Regla de exclusión: si contiene interrogativos abiertos, descartar
+        for patron in PATRONES_PREGUNTAS_ABIERTAS:
+            if re.search(patron, ultima_pregunta):
+                logger.info("[RAG SINO] Pregunta abierta detectada ('%s'). mostrar_sino=False", patron)
+                return False
+
+        # 2. Regla de inclusión: si coincide con patrones cerrados específicos
+        for patron in PATRONES_PREGUNTAS_CERRADAS:
+            if re.search(patron, ultima_pregunta) or re.search(patron, ultimo_tramo):
+                logger.info("[RAG SINO] Pregunta cerrada detectada ('%s'). mostrar_sino=True", patron)
+                return True
+
+        # 3. Heurística general para preguntas interrogativas cerradas
+        # Si termina en signo de interrogación o contiene pregunta sin pronombres interrogativos abiertos
+        if "?" in ultimo_tramo or "¿" in ultimo_tramo:
+            # Si no fue clasificada como abierta arriba, y es una pregunta corta de validación
+            if any(verbo in ultima_pregunta for verbo in ["pudiste", "funciona", "sirve", "aparece", "muestra", "resuelto", "correcto", "listo"]):
+                return True
+
+        return False
 
     # ------------------------------------------------------------------ #
     #  Recuperación de Contexto Vectorial                                  #
@@ -111,8 +176,13 @@ class RagService:
         user_name: str,
         pregunta: str,
         image_base64: Optional[str] = None
-    ) -> tuple[str, bool]:
-        """Orquesta el ciclo completo de RAG con Gemini y persistencia atómica."""
+    ) -> tuple[str, bool, bool]:
+        """
+        Orquesta el ciclo completo de RAG con Gemini y persistencia atómica.
+
+        Retorna:
+            tuple[str, bool, bool]: (respuesta_texto, mostrar_sino, mostrar_cambiar_tema)
+        """
         logger.info(
             "[RAG] Consulta recibida — usuario: %s (%s): %s",
             user_name, conversation_id, pregunta
@@ -127,7 +197,14 @@ class RagService:
         # — Análisis de imagen adjunta —
         descripcion_imagen = ""
         if image_base64:
-            descripcion_imagen = await self.llm_service.extraer_descripcion_imagen(image_base64)
+            for intento in range(settings.MAX_RETRIES_LLM + 1):
+                try:
+                    descripcion_imagen = await self.llm_service.extraer_descripcion_imagen(image_base64)
+                    break
+                except Exception as e:
+                    logger.warning("[RAG LLM RETRY] Reintento %d extracción imagen falló: %s", intento, e)
+                    if intento == settings.MAX_RETRIES_LLM:
+                        descripcion_imagen = ""
 
         mensaje_usuario_bd = (
             f"[Imagen: {descripcion_imagen}] {pregunta}".strip()
@@ -152,7 +229,7 @@ class RagService:
 
         # — Detección de cierre exitoso de incidente (MÁXIMA PRIORIDAD) —
         # Si el usuario confirma que el problema se resolvió, se limpia el estado
-        # y se retorna una despedida cordial sin más pasos técnicos (mostrar_botones=False).
+        # y se retorna una despedida cordial sin botones (mostrar_sino=False, mostrar_cambiar_tema=False).
         if any(frase in pregunta_limpia for frase in FRASES_EXITO):
             logger.info("[RAG] Cierre de incidente detectado para: %s", user_name)
             despedida = (
@@ -160,7 +237,6 @@ class RagService:
                 "Si en el futuro tienes otra consulta técnica, aquí estaré para ayudarte. "
                 "¡Que tengas un excelente día!"
             )
-            # Limpiar estado de la conversación para no arrastrar contexto a futuras consultas
             await asyncio.to_thread(
                 self.conversation_repo.actualizar_estado_conversacion,
                 conversation_id, None, None
@@ -173,7 +249,7 @@ class RagService:
                 self.conversation_repo.agregar_mensaje,
                 conversation_id, user_id, user_name, "assistant", despedida
             )
-            return despedida, False
+            return despedida, False, False
 
         # — Saludo inicial —
         if pregunta_normalizada in SALUDOS and not historial:
@@ -190,7 +266,7 @@ class RagService:
                 self.conversation_repo.agregar_mensaje,
                 conversation_id, user_id, user_name, "assistant", respuesta_saludo
             )
-            return respuesta_saludo, False
+            return respuesta_saludo, False, True
 
         es_respuesta_corta = (
             pregunta_limpia in RESPUESTAS_SEGUIMIENTO
@@ -265,9 +341,9 @@ class RagService:
                 self.conversation_repo.agregar_mensaje,
                 conversation_id, user_id, user_name, "assistant", respuesta_sin_doc
             )
-            return respuesta_sin_doc, False
+            return respuesta_sin_doc, False, True
 
-        # — Construir prompt y generar respuesta —
+        # — Construir prompt y generar respuesta con reintentos —
         prompt = construir_prompt(
             usuario=user_name,
             pregunta=pregunta,
@@ -276,7 +352,26 @@ class RagService:
             root_issue=root_issue
         )
 
-        respuesta = await self.llm_service.generar_respuesta(prompt, image_base64)
+        respuesta = ""
+        ultimo_error: Optional[Exception] = None
+        for intento in range(settings.MAX_RETRIES_LLM + 1):
+            try:
+                respuesta = await self.llm_service.generar_respuesta(prompt, image_base64)
+                if respuesta and respuesta.strip():
+                    break
+            except Exception as e:
+                ultimo_error = e
+                logger.warning(
+                    "[RAG LLM RETRY] Intento %d de generación falló: %s",
+                    intento + 1, e
+                )
+                if intento < settings.MAX_RETRIES_LLM:
+                    await asyncio.sleep(0.8 * (intento + 1))
+
+        if not respuesta or not respuesta.strip():
+            if ultimo_error:
+                logger.error("[RAG LLM FATAL] Se agotaron los reintentos con el LLM: %s", ultimo_error)
+            raise RuntimeError("Fallo temporal al comunicarse con el modelo de IA tras varios reintentos.")
 
         await asyncio.to_thread(
             self.conversation_repo.agregar_mensaje,
@@ -287,5 +382,12 @@ class RagService:
             conversation_id, user_id, user_name, "assistant", respuesta
         )
 
-        logger.info("[RAG] Respuesta generada y persistida exitosamente.")
-        return respuesta, True
+        # Evaluación dinámica de botones interactivos
+        mostrar_sino = self.evaluar_requiere_sino(respuesta)
+        mostrar_cambiar_tema = True
+
+        logger.info(
+            "[RAG] Respuesta lista. mostrar_sino=%s, mostrar_cambiar_tema=%s",
+            mostrar_sino, mostrar_cambiar_tema
+        )
+        return respuesta, mostrar_sino, mostrar_cambiar_tema
