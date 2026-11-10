@@ -121,7 +121,39 @@ class AttachmentDataRef(BaseChatModel):
 class AttachmentSchema(BaseChatModel):
     name: Optional[str] = None
     contentType: Optional[str] = None
+    contentName: Optional[str] = None
+    downloadUri: Optional[str] = None
+    thumbnailUri: Optional[str] = None
+    source: Optional[str] = None
     attachmentDataRef: Optional[AttachmentDataRef] = None
+
+
+def _extract_attachments_recursive(data: Any) -> List[AttachmentSchema]:
+    """Busca recursivamente adjuntos en cualquier estructura del JSON recibido."""
+    encontrados: List[AttachmentSchema] = []
+    if isinstance(data, dict):
+        for key in ["attachment", "attachments"]:
+            if key in data:
+                val = data[key]
+                if isinstance(val, list):
+                    for item in val:
+                        if isinstance(item, dict):
+                            try:
+                                encontrados.append(AttachmentSchema(**item))
+                            except Exception:
+                                pass
+                elif isinstance(val, dict):
+                    try:
+                        encontrados.append(AttachmentSchema(**val))
+                    except Exception:
+                        pass
+        for k, v in data.items():
+            if k not in ["attachment", "attachments"]:
+                encontrados.extend(_extract_attachments_recursive(v))
+    elif isinstance(data, list):
+        for item in data:
+            encontrados.extend(_extract_attachments_recursive(item))
+    return encontrados
 
 
 class MessagePayloadSchema(BaseChatModel):
@@ -329,6 +361,10 @@ class GoogleChatWebhookEvent(BaseChatModel):
             raw = self.action.parameters
         elif self.chat and self.chat.actionEvent and self.chat.actionEvent.parameters:
             raw = self.chat.actionEvent.parameters
+        elif self.raw_payload:
+            act = self.raw_payload.get("action") or (self.raw_payload.get("commonEventObject") or {})
+            if isinstance(act, dict):
+                raw = act.get("parameters")
 
         if isinstance(raw, dict):
             return {k: str(v) for k, v in raw.items()}
@@ -349,18 +385,23 @@ class GoogleChatWebhookEvent(BaseChatModel):
             return self.action.actionMethodName
         if self.chat and self.chat.actionEvent:
             return self.chat.actionEvent.function or self.chat.actionEvent.actionMethodName or ""
+        if self.raw_payload:
+            act = self.raw_payload.get("action") or (self.raw_payload.get("commonEventObject") or {})
+            if isinstance(act, dict):
+                return act.get("function") or act.get("actionMethodName") or act.get("invokedFunction") or ""
         return ""
 
     def is_button_click(self) -> bool:
         return bool(
             self.buttonClickedPayload
             or (self.chat and self.chat.buttonClickedPayload)
-            or self.type == "CARD_CLICKED"
+            or self.type in {"CARD_CLICKED", "MESSAGE_APP_ACTION"}
             or self.get_invoked_function()
             or self.get_action_parameters()
         )
 
     def get_attachments(self) -> List[AttachmentSchema]:
+        """Recupera la lista de adjuntos inspeccionando modelos tipados y raw_payload recursivo."""
         atts: List[AttachmentSchema] = []
         if self.message:
             if self.message.attachment:
@@ -372,6 +413,10 @@ class GoogleChatWebhookEvent(BaseChatModel):
                 atts.extend(self.chat.messagePayload.attachment)
             if self.chat.messagePayload.attachments:
                 atts.extend(self.chat.messagePayload.attachments)
+
+        if not atts and self.raw_payload:
+            atts = _extract_attachments_recursive(self.raw_payload)
+
         return atts
 
     def get_text_content(self) -> str:

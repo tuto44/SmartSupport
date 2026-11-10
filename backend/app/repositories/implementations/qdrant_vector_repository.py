@@ -8,14 +8,43 @@ from app.repositories.interfaces.vector_repository import IVectorRepository
 class QdrantVectorRepository(IVectorRepository):
     """Implementación de IVectorRepository utilizando QdrantClient."""
 
-    def __init__(self, url: str | None = None, collection_name: str | None = None):
+    def __init__(
+        self,
+        url: str | None = None,
+        collection_name: str | None = None,
+        api_key: str | None = None
+    ):
         self.url = url or settings.QDRANT_URL
         self.collection_name = collection_name or settings.COLLECTION_NAME
-        self.client = QdrantClient(url=self.url)
+        self.client = QdrantClient(
+            url=self.url,
+            api_key=api_key or settings.QDRANT_API_KEY
+        )
 
-    def crear_coleccion_si_no_existe(self, vector_size: int = 768) -> None:
+    def _dimension_coleccion(self) -> int | None:
+        """Obtiene la dimensión configurada de la colección (None si no aplica)."""
+        info = self.client.get_collection(collection_name=self.collection_name)
+        vectores = info.config.params.vectors
+        size = getattr(vectores, "size", None)
+        return int(size) if size is not None else None
+
+    def crear_coleccion_si_no_existe(
+        self,
+        vector_size: int = settings.EMBEDDING_DIMENSIONS
+    ) -> None:
         if self.client.collection_exists(collection_name=self.collection_name):
-            print(f"[QDRANT] Colección '{self.collection_name}' ya existe.")
+            dimension_actual = self._dimension_coleccion()
+            if dimension_actual is not None and dimension_actual != vector_size:
+                raise ValueError(
+                    f"La colección Qdrant '{self.collection_name}' tiene "
+                    f"{dimension_actual} dimensiones, pero la configuración espera "
+                    f"{vector_size}. Ajusta EMBEDDING_DIMENSIONS o reindexa la "
+                    "colección con la dimensión correcta."
+                )
+            print(
+                f"[QDRANT] Colección '{self.collection_name}' ya existe "
+                f"(dimensión: {dimension_actual})."
+            )
             return
 
         self.client.create_collection(

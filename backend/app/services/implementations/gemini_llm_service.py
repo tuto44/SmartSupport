@@ -23,11 +23,12 @@ class GeminiLLMService(ILLMService):
     def __init__(self) -> None:
         self._embedding_model = GoogleGenerativeAIEmbeddings(
             model=settings.EMBEDDING_MODEL,
-            google_api_key=settings.GOOGLE_API_KEY or None
+            google_api_key=settings.GOOGLE_API_KEY or None,
+            output_dimensionality=settings.EMBEDDING_DIMENSIONS
         )
         self._llm = ChatGoogleGenerativeAI(
             model=settings.CHAT_MODEL,
-            temperature=0.2,
+            request_timeout=settings.REQUEST_TIMEOUT_SECONDS,
             google_api_key=settings.GOOGLE_API_KEY or None
         )
         logger.info(
@@ -36,7 +37,7 @@ class GeminiLLMService(ILLMService):
         )
 
     # ------------------------------------------------------------------ #
-    #  ILLMService — Embeddings                                            #
+    #  ILLMService — Embeddings                                          #
     # ------------------------------------------------------------------ #
 
     async def generar_embedding(self, texto: str) -> List[float]:
@@ -56,9 +57,11 @@ class GeminiLLMService(ILLMService):
                 else f"data:image/jpeg;base64,{image_base64}"
             )
             prompt_extraccion = (
-                "Actúa como un analizador técnico de TI. Observa esta imagen y responde en 1 sola línea breve: "
-                "el nombre del software o sistema involucrado y el mensaje o código de error textual exacto. "
-                "Responde únicamente palabras clave técnicas concisas."
+                "Eres un especialista de soporte de TI Nivel 1. Analiza con precisión la captura o imagen adjunta:\n"
+                "1. Extrae el nombre exacto de la aplicación o sistema visible (ej. SAP Logon, WPass, Citrix, GlobalProtect, FortiClient, Outlook, Windows, navegador web).\n"
+                "2. Transcribe de forma textual y exacta cualquier mensaje de error, código de falla, advertencia o diálogo que aparezca en pantalla.\n"
+                "3. Si no hay error explícito, resume la ventana, formulario o pantalla que visualiza el usuario.\n\n"
+                "Responde de forma directa con los términos técnicos extraídos (ejemplo: 'Sistema: SAP Logon. Error: Error al conectar con el servidor 10.x.x.x WSAECONNREFUSED'), sin introducciones ni despedidas."
             )
             mensaje = HumanMessage(
                 content=[
@@ -106,4 +109,3 @@ class GeminiLLMService(ILLMService):
             partes = [b if isinstance(b, str) else b.get("text", "") for b in contenido]
             return "".join(partes)
         return str(contenido)
-

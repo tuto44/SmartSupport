@@ -19,14 +19,33 @@ _vector_repository_instance: IVectorRepository | None = None
 _llm_service_instance: ILLMService | None = None
 _google_chat_service_instance: GoogleChatService | None = None
 
-_vector_repository_instance: IVectorRepository = QdrantVectorRepository()
-_llm_service_instance: ILLMService = GeminiLLMService()
-_google_chat_service_instance: GoogleChatService = GoogleChatService()
-
 
 # ------------------------------------------------------------------ #
-#  Proveedores de Dependencias (FastAPI Depends)                       #
+#  Factories puras (usables fuera del ciclo request/response)          #
 # ------------------------------------------------------------------ #
+
+def build_conversation_repository(db: Session) -> IConversationRepository:
+    """Construye el repositorio de conversaciones sobre una sesión dada."""
+    return MySQLConversationRepository(session=db)
+
+
+def build_rag_service(
+    conversation_repo: IConversationRepository,
+    vector_repo: IVectorRepository | None = None,
+    llm_service: ILLMService | None = None
+) -> RagService:
+    """
+    Ensambla RagService con inversión de dependencias total.
+
+    Los colaboradores de infraestructura se resuelven como singletons lazy
+    cuando no se inyectan explícitamente (útil en tareas de background).
+    """
+    return RagService(
+        conversation_repo=conversation_repo,
+        vector_repo=vector_repo or get_vector_repository(),
+        llm_service=llm_service or get_llm_service()
+    )
+
 
 # ------------------------------------------------------------------ #
 #  Proveedores de Dependencias (FastAPI Depends)                       #
@@ -39,7 +58,7 @@ def get_conversation_repository(
     Provee MySQLConversationRepository ligado a la sesión activa del request.
     El ciclo de vida de la sesión (commit/rollback) lo gestiona get_db().
     """
-    return MySQLConversationRepository(session=db)
+    return build_conversation_repository(db)
 
 
 def get_vector_repository() -> IVectorRepository:
@@ -71,11 +90,8 @@ def get_rag_service(
     vector_repo: IVectorRepository = Depends(get_vector_repository),
     llm_service: ILLMService = Depends(get_llm_service)
 ) -> RagService:
-    """
-    Ensambla RagService con inversión de dependencias total.
-    Todos los colaboradores se inyectan como contratos abstractos (DIP).
-    """
-    return RagService(
+    """Ensambla RagService para el ciclo request/response de FastAPI."""
+    return build_rag_service(
         conversation_repo=conversation_repo,
         vector_repo=vector_repo,
         llm_service=llm_service

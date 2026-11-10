@@ -1,13 +1,14 @@
 import asyncio
 import logging
 import re
-from typing import List, Optional
+from typing import Any, Awaitable, Callable, List, Optional
 
 from app.prompts.system_prompt import construir_prompt
 from app.repositories.interfaces.conversation_repository import IConversationRepository
 from app.repositories.interfaces.vector_repository import IVectorRepository
 from app.services.interfaces.llm_service import ILLMService
 from app.core.config import settings
+from app.core.messages import MENSAJE_ERROR_RESCATE
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,6 @@ FRASES_RECUPERACION = {
 }
 
 # Expresiones que indican que el usuario confirmó el cierre exitoso del incidente.
-# Cuando se detectan, se limpia el estado y se retorna una despedida sin más pasos técnicos.
 FRASES_EXITO = {
     "ya funcionó", "ya funciono", "ya sirvió", "ya sirvio",
     "ya pude", "ya pude entrar", "ya quedó", "ya quedo",
@@ -42,24 +42,43 @@ FRASES_EXITO = {
     "ya se solucionó", "ya se soluciono", "ya quedó listo"
 }
 
-# Patrones para clasificar preguntas abiertas (no deben mostrar botones Sí / No)
-PATRONES_PREGUNTAS_ABIERTAS = [
-    r"¿?\s*qué\b", r"¿?\s*que\b", r"¿?\s*cuál\b", r"¿?\s*cual\b",
-    r"¿?\s*cuáles\b", r"¿?\s*cuales\b", r"¿?\s*cómo\b", r"¿?\s*como\b",
-    r"¿?\s*dónde\b", r"¿?\s*donde\b", r"¿?\s*por\s+qué\b", r"¿?\s*por\s+que\b",
-    r"¿?\s*cuándo\b", r"¿?\s*cuando\b", r"¿?\s*quién\b", r"¿?\s*quien\b",
-    r"\bdescribe\b", r"\bingresa\b", r"\bindica\b", r"\bescribe\b"
-]
+# Preguntas que expresan una confirmación binaria sobre un paso del manual.
+# Sólo estas habilitan los botones Sí / No / Cambiar tema.
+PATRONES_CONFIRMACION = (
+    r"\blograste\b",
+    r"\bpudiste\b",
+    r"\bte\s+funcion[oó]\b",
+    r"\bte\s+sirvi[oó]\b",
+    r"\bte\s+aparece\b",
+    r"\bse\s+muestra\b",
+    r"\bse\s+solucion[oó]\b",
+    r"\b(?:lo|la)\s+visualizas\b",
+    r"\bya\s+(?:carg[oó]|conect[oó]|ingresaste|accediste)\b",
+    r"\bcontin[uú]a\s+el\s+(?:error|problema|falla)\b",
+    r"\bpersiste\b",
+    r"\brecibiste\b",
+    r"\bcompletaste\b",
+    r"\baccediste\b",
+    r"\bingresaste\b",
+    r"\bpuedes\s+(?:ingresar|acceder|ver|visualizar)\b",
+    r"\bconfirmas\b",
+    r"\bdeseas\s+que\s+te\s+gu[ií]e\b",
+    r"\bquieres\s+(?:intentar|continuar)\b",
+)
 
-# Patrones para clasificar preguntas cerradas que esperan confirmación binaria (Sí / No)
-PATRONES_PREGUNTAS_CERRADAS = [
-    r"¿?\s*lograste", r"¿?\s*pudiste", r"¿?\s*te\s+funcion[oó]", r"¿?\s*te\s+sirvi[oó]",
-    r"¿?\s*te\s+aparece", r"¿?\s*se\s+muestra", r"¿?\s*lo\s+visualizas", r"¿?\s*la\s+visualizas",
-    r"¿?\s*ya\s+carg[oó]", r"¿?\s*ya\s+conect[oó]", r"¿?\s*contin[uú]a\s+el\s+error",
-    r"¿?\s*persiste\s+la\s+falla", r"¿?\s*persiste\s+el\s+error", r"¿?\s*persiste\s+el\s+problema",
-    r"¿?\s*deseas\s+que\s+te\s+gu[ií]e", r"¿?\s*quieres\s+intentar", r"¿?\s*funcion[oó]",
-    r"¿?\s*pudiste\s+ingresar", r"¿?\s*lograste\s+entrar", r"¿?\s*se\s+solucion[oó]"
-]
+# Interrogativos abiertos: nunca deben habilitar botones de confirmación.
+PATRONES_PREGUNTA_ABIERTA = (
+    r"\bqu[eé]\b",
+    r"\bc[oó]mo\b",
+    r"\bcu[aá]l(?:es)?\b",
+    r"\bd[oó]nde\b",
+    r"\bpor\s+qu[eé]\b",
+    r"\bcu[aá]ndo\b",
+    r"\bqui[eé]n\b",
+    r"\bdescribe\b",
+    r"\bindica\b",
+    r"\bescribe\b",
+)
 
 
 class RagService:
@@ -84,52 +103,106 @@ class RagService:
         self.llm_service = llm_service
 
     # ------------------------------------------------------------------ #
-    #  Evaluación de Pregunta Cerrada vs Abierta                          #
+    #  Visibilidad estricta de botones                                   #
     # ------------------------------------------------------------------ #
 
-    def evaluar_requiere_sino(self, texto_respuesta: str) -> bool:
+    def _solicita_confirmacion(self, respuesta: str) -> bool:
         """
         Determina si el cierre o la última oración de la respuesta contiene una
-        pregunta cerrada de verificación/confirmación que deba presentar botones Sí/No.
+        pregunta cerrada de verificación/confirmación que requiera botones Sí/No.
 
-        Si es pregunta abierta (¿Qué, Cómo, Cuál, etc.) o informativa, retorna False.
+        Lógica:
+        - Si no contiene signos de interrogación, retorna False.
+        - Si contiene interrogativos abiertos (¿qué, cómo, cuál, etc.), retorna False.
+        - De lo contrario, al ser una pregunta de verificación técnica, retorna True.
         """
-        if not texto_respuesta or not texto_respuesta.strip():
+        if not respuesta or not respuesta.strip():
             return False
 
-        # Extraer las últimas oraciones/líneas relevantes del mensaje
-        lineas = [line.strip() for line in texto_respuesta.strip().split("\n") if line.strip()]
-        if not lineas:
-            return False
-
-        # Tomar la última porción o encontrar la última pregunta (entre ¿ y ?)
-        ultimo_tramo = lineas[-1].lower()
-        coincidencias_preguntas = re.findall(r"¿([^?]+)\?", texto_respuesta.lower())
-        ultima_pregunta = coincidencias_preguntas[-1] if coincidencias_preguntas else ultimo_tramo
-
-        # 1. Regla de exclusión: si contiene interrogativos abiertos, descartar
-        for patron in PATRONES_PREGUNTAS_ABIERTAS:
-            if re.search(patron, ultima_pregunta):
-                logger.info("[RAG SINO] Pregunta abierta detectada ('%s'). mostrar_sino=False", patron)
+        coincidencias = re.findall(r"¿([^?]+)\?", respuesta)
+        if coincidencias:
+            ultima_pregunta = coincidencias[-1].strip().lower()
+        else:
+            lineas_con_pregunta = [
+                linea.strip().lower()
+                for linea in respuesta.splitlines()
+                if "?" in linea
+            ]
+            if not lineas_con_pregunta:
                 return False
+            ultima_pregunta = lineas_con_pregunta[-1]
 
-        # 2. Regla de inclusión: si coincide con patrones cerrados específicos
-        for patron in PATRONES_PREGUNTAS_CERRADAS:
-            if re.search(patron, ultima_pregunta) or re.search(patron, ultimo_tramo):
-                logger.info("[RAG SINO] Pregunta cerrada detectada ('%s'). mostrar_sino=True", patron)
-                return True
+        # Si es una pregunta abierta que invita a describir o ingresar datos
+        if any(
+            re.search(patron, ultima_pregunta)
+            for patron in PATRONES_PREGUNTA_ABIERTA
+        ):
+            return False
 
-        # 3. Heurística general para preguntas interrogativas cerradas
-        # Si termina en signo de interrogación o contiene pregunta sin pronombres interrogativos abiertos
-        if "?" in ultimo_tramo or "¿" in ultimo_tramo:
-            # Si no fue clasificada como abierta arriba, y es una pregunta corta de validación
-            if any(verbo in ultima_pregunta for verbo in ["pudiste", "funciona", "sirve", "aparece", "muestra", "resuelto", "correcto", "listo"]):
-                return True
-
-        return False
+        # Si no fue excluida por interrogativo abierto, es una pregunta cerrada de confirmación
+        return True
 
     # ------------------------------------------------------------------ #
-    #  Recuperación de Contexto Vectorial                                  #
+    #  Ejecución resiliente de llamadas a Gemini                         #
+    # ------------------------------------------------------------------ #
+
+    async def _invocar_llm_con_reintentos(
+        self,
+        operacion: Callable[[], Awaitable[Any]],
+        descripcion: str,
+        validador: Optional[Callable[[Any], bool]] = None
+    ) -> Any:
+        """
+        Ejecuta una operación del LLM con timeout por intento y reintentos.
+
+        Cada intento se acota con REQUEST_TIMEOUT_SECONDS para que una conexión
+        colgada no bloquee el procesamiento. Si todos los intentos fallan,
+        propaga la última excepción para que el llamador decida el mensaje final.
+        """
+        ultimo_error: Optional[Exception] = None
+        intentos_totales = settings.MAX_RETRIES_LLM + 1
+
+        for intento in range(1, intentos_totales + 1):
+            try:
+                resultado = await asyncio.wait_for(
+                    operacion(),
+                    timeout=settings.REQUEST_TIMEOUT_SECONDS
+                )
+                if validador is None or validador(resultado):
+                    return resultado
+                ultimo_error = RuntimeError(
+                    f"{descripcion}: el LLM devolvió una respuesta vacía"
+                )
+                logger.warning(
+                    "[RAG LLM] Intento %d/%d de %s devolvió una respuesta vacía.",
+                    intento, intentos_totales, descripcion
+                )
+            except asyncio.TimeoutError:
+                ultimo_error = asyncio.TimeoutError(
+                    f"{descripcion}: excedió {settings.REQUEST_TIMEOUT_SECONDS}s"
+                )
+                logger.warning(
+                    "[RAG LLM TIMEOUT] Intento %d/%d de %s excedió %.1fs.",
+                    intento, intentos_totales, descripcion,
+                    settings.REQUEST_TIMEOUT_SECONDS
+                )
+            except Exception as error:
+                ultimo_error = error
+                logger.warning(
+                    "[RAG LLM RETRY] Intento %d/%d de %s falló: %s",
+                    intento, intentos_totales, descripcion, error
+                )
+
+            if intento < intentos_totales:
+                # Backoff progresivo y acotado antes del siguiente intento.
+                await asyncio.sleep(0.8 * intento)
+
+        if ultimo_error:
+            raise ultimo_error
+        raise RuntimeError(f"{descripcion}: no se obtuvo respuesta del LLM")
+
+    # ------------------------------------------------------------------ #
+    #  Recuperación de Contexto Vectorial                                #
     # ------------------------------------------------------------------ #
 
     async def recuperar_contexto(
@@ -139,7 +212,11 @@ class RagService:
     ) -> Optional[str]:
         """Recupera fragmentos de manuales técnicos con umbral de similitud estricto."""
         logger.info("[RAG] Búsqueda vectorial para: '%s'", pregunta)
-        embedding = await self.llm_service.generar_embedding(pregunta)
+        embedding = await self._invocar_llm_con_reintentos(
+            lambda: self.llm_service.generar_embedding(pregunta),
+            "generación de embedding",
+            validador=bool
+        )
         resultados = await asyncio.to_thread(
             self.vector_repo.buscar_similares, embedding, limite
         )
@@ -150,8 +227,6 @@ class RagService:
         contexto = []
         for resultado in resultados:
             score = getattr(resultado, "score", 0.0)
-            # Solo se incluyen fragmentos que superen el umbral MIN_SIMILARITY_SCORE (0.65).
-            # Fragmentos con score menor se descartan para evitar alucinaciones.
             if score < settings.MIN_SIMILARITY_SCORE:
                 logger.info(
                     "[RAG] Fragmento descartado por similitud insuficiente: score=%.3f (umbral=%.2f)",
@@ -166,7 +241,7 @@ class RagService:
         return "\n\n".join(contexto) if contexto else None
 
     # ------------------------------------------------------------------ #
-    #  Ciclo principal de respuesta                                        #
+    #  Ciclo principal de respuesta                                      #
     # ------------------------------------------------------------------ #
 
     async def responder(
@@ -176,17 +251,23 @@ class RagService:
         user_name: str,
         pregunta: str,
         image_base64: Optional[str] = None
-    ) -> tuple[str, bool, bool]:
+    ) -> tuple[str, bool]:
         """
         Orquesta el ciclo completo de RAG con Gemini y persistencia atómica.
 
         Retorna:
-            tuple[str, bool, bool]: (respuesta_texto, mostrar_sino, mostrar_cambiar_tema)
+            tuple[str, bool]: (respuesta_texto, mostrar_botones). El flag sólo
+            es True cuando hay documentación y la respuesta espera confirmación
+            de un paso del manual.
         """
         logger.info(
             "[RAG] Consulta recibida — usuario: %s (%s): %s",
             user_name, conversation_id, pregunta
         )
+
+        # Imagen sin texto: nunca debe caer en el saludo inicial.
+        if image_base64 and not (pregunta or "").strip():
+            pregunta = "Analiza esta imagen y dime cuál es el problema."
 
         title = pregunta[:30] + ("..." if len(pregunta) > 30 else "")
         await asyncio.to_thread(
@@ -197,14 +278,17 @@ class RagService:
         # — Análisis de imagen adjunta —
         descripcion_imagen = ""
         if image_base64:
-            for intento in range(settings.MAX_RETRIES_LLM + 1):
-                try:
-                    descripcion_imagen = await self.llm_service.extraer_descripcion_imagen(image_base64)
-                    break
-                except Exception as e:
-                    logger.warning("[RAG LLM RETRY] Reintento %d extracción imagen falló: %s", intento, e)
-                    if intento == settings.MAX_RETRIES_LLM:
-                        descripcion_imagen = ""
+            try:
+                descripcion_imagen = await self._invocar_llm_con_reintentos(
+                    lambda: self.llm_service.extraer_descripcion_imagen(image_base64),
+                    "análisis de imagen"
+                )
+            except Exception as error:
+                logger.warning(
+                    "[RAG LLM] No se pudo describir la imagen tras los reintentos: %s",
+                    error
+                )
+                descripcion_imagen = ""
 
         mensaje_usuario_bd = (
             f"[Imagen: {descripcion_imagen}] {pregunta}".strip()
@@ -228,8 +312,6 @@ class RagService:
         ).strip()
 
         # — Detección de cierre exitoso de incidente (MÁXIMA PRIORIDAD) —
-        # Si el usuario confirma que el problema se resolvió, se limpia el estado
-        # y se retorna una despedida cordial sin botones (mostrar_sino=False, mostrar_cambiar_tema=False).
         if any(frase in pregunta_limpia for frase in FRASES_EXITO):
             logger.info("[RAG] Cierre de incidente detectado para: %s", user_name)
             despedida = (
@@ -238,8 +320,8 @@ class RagService:
                 "¡Que tengas un excelente día!"
             )
             await asyncio.to_thread(
-                self.conversation_repo.actualizar_estado_conversacion,
-                conversation_id, None, None
+                self.conversation_repo.limpiar_estado,
+                conversation_id
             )
             await asyncio.to_thread(
                 self.conversation_repo.agregar_mensaje,
@@ -249,10 +331,15 @@ class RagService:
                 self.conversation_repo.agregar_mensaje,
                 conversation_id, user_id, user_name, "assistant", despedida
             )
-            return despedida, False, False
+            return despedida, False
 
         # — Saludo inicial —
-        if pregunta_normalizada in SALUDOS and not historial:
+        # Con una imagen adjunta jamás se responde con el saludo genérico.
+        if (
+            pregunta_normalizada in SALUDOS
+            and not historial
+            and not image_base64
+        ):
             respuesta_saludo = (
                 f"¡Hola, {user_name}! 👋\n\n"
                 "Soy tu Asistente Técnico de TI Nivel 1. ¿En qué problema, sistema o requerimiento "
@@ -266,7 +353,7 @@ class RagService:
                 self.conversation_repo.agregar_mensaje,
                 conversation_id, user_id, user_name, "assistant", respuesta_saludo
             )
-            return respuesta_saludo, False, True
+            return respuesta_saludo, False
 
         es_respuesta_corta = (
             pregunta_limpia in RESPUESTAS_SEGUIMIENTO
@@ -291,15 +378,28 @@ class RagService:
         elif es_respuesta_corta:
             consulta_busqueda = None
         elif descripcion_imagen:
-            consulta_busqueda = f"{pregunta} {descripcion_imagen}".strip()
+            # Extraer términos clave limpios para el vector search evitando dilución de embeddings
+            terminos_limpios = (
+                descripcion_imagen
+                .replace("Sistema:", "")
+                .replace("Error:", "")
+                .replace("1.", "")
+                .replace("2.", "")
+                .replace("3.", "")
+                .strip()
+            )
+            palabras = terminos_limpios.split()[:25]
+            consulta_busqueda = " ".join(palabras)
         else:
             consulta_busqueda = pregunta
 
         contexto: Optional[str] = None
+        documentacion_encontrada = False
         if consulta_busqueda:
             contexto = await self.recuperar_contexto(pregunta=consulta_busqueda)
 
         if contexto:
+            documentacion_encontrada = True
             await asyncio.to_thread(
                 self.conversation_repo.actualizar_estado_conversacion,
                 conversation_id, None, contexto
@@ -307,71 +407,60 @@ class RagService:
         elif last_context:
             logger.info("[RAG] Reutilizando manual activo guardado en base de datos.")
             contexto = last_context
+            documentacion_encontrada = True
         elif es_respuesta_corta and historial:
             logger.info("[RAG] Reconstruyendo contexto desde historial previo...")
             mensajes_previos = [m.content for m in historial if m.role == "user"]
             if mensajes_previos:
                 contexto = await self.recuperar_contexto(pregunta=mensajes_previos[-1])
                 if contexto:
+                    documentacion_encontrada = True
                     await asyncio.to_thread(
                         self.conversation_repo.actualizar_estado_conversacion,
                         conversation_id, None, contexto
                     )
         elif image_base64:
             contexto = (
-                "No se encontró un manual específico en la base de conocimientos. "
-                "Diagnostica el problema técnico analizando visualmente la imagen adjunta."
+                f"El usuario adjuntó una captura de pantalla. Diagnóstico visual en pantalla: {descripcion_imagen}. "
+                "Examina directamente la imagen adjunta para guiar al usuario según el ecosistema correspondiente."
             )
-
-        # — Sin contexto disponible: derivación formal —
-        if not contexto:
-            respuesta_sin_doc = (
-                "⚠️ No encontré un procedimiento específico para tu consulta en la base de conocimiento "
-                "oficial del Asistente TI.\n\n"
-                "Para obtener soporte especializado, te recomiendo:\n"
-                "1. 📋 Generar un ticket en **My Whirlpool** > *IT Service Catalog* > **Something's Broken**\n"
-                "2. 📞 Contactar a la **Mesa de Ayuda Nivel 2** directamente\n\n"
-                "Un agente de soporte especializado podrá asistirte con este requerimiento."
-            )
-            await asyncio.to_thread(
-                self.conversation_repo.agregar_mensaje,
-                conversation_id, user_id, user_name, "user", mensaje_usuario_bd
-            )
-            await asyncio.to_thread(
-                self.conversation_repo.agregar_mensaje,
-                conversation_id, user_id, user_name, "assistant", respuesta_sin_doc
-            )
-            return respuesta_sin_doc, False, True
+            documentacion_encontrada = True
 
         # — Construir prompt y generar respuesta con reintentos —
+        pregunta_efectiva = pregunta
+        if image_base64 and descripcion_imagen:
+            if "analiza esta imagen" in pregunta.lower() or len(pregunta.split()) <= 4:
+                pregunta_efectiva = (
+                    f"Analiza la captura de pantalla adjunta. En la pantalla se visualiza: {descripcion_imagen}. "
+                    "Diagnostica el problema técnico y entrégame el primer paso de solución."
+                )
+            else:
+                pregunta_efectiva = (
+                    f"{pregunta}\n"
+                    f"[Detalles visuales observados en pantalla: {descripcion_imagen}]"
+                )
+
         prompt = construir_prompt(
             usuario=user_name,
-            pregunta=pregunta,
-            contexto=contexto,
+            pregunta=pregunta_efectiva,
+            contexto=contexto or "",
             historial=historial,
             root_issue=root_issue
         )
 
-        respuesta = ""
-        ultimo_error: Optional[Exception] = None
-        for intento in range(settings.MAX_RETRIES_LLM + 1):
-            try:
-                respuesta = await self.llm_service.generar_respuesta(prompt, image_base64)
-                if respuesta and respuesta.strip():
-                    break
-            except Exception as e:
-                ultimo_error = e
-                logger.warning(
-                    "[RAG LLM RETRY] Intento %d de generación falló: %s",
-                    intento + 1, e
-                )
-                if intento < settings.MAX_RETRIES_LLM:
-                    await asyncio.sleep(0.8 * (intento + 1))
-
-        if not respuesta or not respuesta.strip():
-            if ultimo_error:
-                logger.error("[RAG LLM FATAL] Se agotaron los reintentos con el LLM: %s", ultimo_error)
-            raise RuntimeError("Fallo temporal al comunicarse con el modelo de IA tras varios reintentos.")
+        try:
+            respuesta = await self._invocar_llm_con_reintentos(
+                lambda: self.llm_service.generar_respuesta(prompt, image_base64),
+                "generación de respuesta",
+                validador=lambda texto: bool(texto and texto.strip())
+            )
+        except Exception as error:
+            # Último recurso: ya se agotaron todos los intentos y el backoff.
+            logger.error(
+                "[RAG LLM FATAL] Se agotaron los %d intentos con el LLM: %s",
+                settings.MAX_RETRIES_LLM + 1, error
+            )
+            return MENSAJE_ERROR_RESCATE, False
 
         await asyncio.to_thread(
             self.conversation_repo.agregar_mensaje,
@@ -382,12 +471,12 @@ class RagService:
             conversation_id, user_id, user_name, "assistant", respuesta
         )
 
-        # Evaluación dinámica de botones interactivos
-        mostrar_sino = self.evaluar_requiere_sino(respuesta)
-        mostrar_cambiar_tema = True
+        # Visibilidad de botones Sí / No:
+        # Se muestran cuando la respuesta termina en una pregunta cerrada de validación/confirmación.
+        mostrar_botones = self._solicita_confirmacion(respuesta)
 
         logger.info(
-            "[RAG] Respuesta lista. mostrar_sino=%s, mostrar_cambiar_tema=%s",
-            mostrar_sino, mostrar_cambiar_tema
+            "[RAG] Respuesta lista. mostrar_botones=%s (documentacion=%s)",
+            mostrar_botones, documentacion_encontrada
         )
-        return respuesta, mostrar_sino, mostrar_cambiar_tema
+        return respuesta, mostrar_botones

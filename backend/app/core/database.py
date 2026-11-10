@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from typing import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
@@ -22,8 +23,15 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 
 
-def get_db() -> Generator[Session, None, None]:
-    """Generador de sesiones con commit al finalizar y rollback ante excepciones."""
+@contextmanager
+def session_scope() -> Generator[Session, None, None]:
+    """
+    Context manager de sesión con commit/rollback automático.
+
+    Pensado para tareas que se ejecutan fuera del ciclo de vida de una petición
+    FastAPI (por ejemplo BackgroundTasks), donde la sesión inyectada por
+    Depends(get_db) ya fue cerrada al devolver la respuesta HTTP.
+    """
     session = SessionLocal()
     try:
         yield session
@@ -33,6 +41,12 @@ def get_db() -> Generator[Session, None, None]:
         raise
     finally:
         session.close()
+
+
+def get_db() -> Generator[Session, None, None]:
+    """Generador de sesiones con commit al finalizar y rollback ante excepciones."""
+    with session_scope() as session:
+        yield session
 
 
 def init_db() -> None:

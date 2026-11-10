@@ -28,15 +28,42 @@ class Settings(BaseSettings):
         default="gemini-embedding-001",
         description="Identificador del modelo para generación de embeddings"
     )
+    EMBEDDING_DIMENSIONS: int = Field(
+        default=3072,
+        description=(
+            "Dimensión de salida de los embeddings. Debe coincidir con la "
+            "configuración de la colección Qdrant."
+        )
+    )
 
     # Resiliencia y Control de Timeouts
     REQUEST_TIMEOUT_SECONDS: float = Field(
-        default=18.0,
-        description="Límite máximo de espera antes del timeout de Google Chat"
+        default=22.0,
+        description=(
+            "Tiempo máximo de espera síncrona en el webhook antes de enviar "
+            "la respuesta de rescate controlada a Google Chat (Google Chat timeout = 30s)."
+        )
     )
     MAX_RETRIES_LLM: int = Field(
         default=2,
-        description="Número máximo de reintentos para llamadas al LLM ante fallos transitorios"
+        description=(
+            "Número máximo de reintentos para llamadas al LLM ante fallos o "
+            "timeouts. Los intentos totales son MAX_RETRIES_LLM + 1."
+        )
+    )
+    PROCESSING_NOTICE_SECONDS: float = Field(
+        default=4.5,
+        description=(
+            "Umbral de espera tras el cual se envía al usuario un aviso "
+            "proactivo indicando que la petición está tardando más de lo normal."
+        )
+    )
+    BACKGROUND_TIMEOUT_SECONDS: float = Field(
+        default=60.0,
+        description=(
+            "Límite global del procesamiento en background. Al superarse se "
+            "cancela el trabajo y se envía el mensaje de rescate como último recurso."
+        )
     )
 
     # Qdrant Vector Database
