@@ -72,6 +72,8 @@ services:
     volumes:
       - ./backend:/app
       - ./documentos:/app/documentos
+      # CRÍTICO: Mapeo del archivo JSON de permisos al contenedor (Asegúrate de que la ruta host coincida con la ubicación real)
+      - ./smartsupport-512916-06c4920912ab.json:/app/smartsupport-512916-06c4920912ab.json:ro
     depends_on:
       mysql:
         condition: service_healthy
