@@ -38,11 +38,6 @@ class IConversationRepository(ABC):
         pass
 
     @abstractmethod
-    def limpiar_estado(self, conversation_id: str) -> None:
-        """Limpia root_issue y last_context dejando la conversación sin contexto activo."""
-        pass
-
-    @abstractmethod
     def obtener_historial(
         self,
         conversation_id: str,

@@ -2,9 +2,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.api.v1.routes import router as v1_router
 from app.core.database import init_db
-from app.core.logging_config import configurar_logging
-
-configurar_logging()
 
 
 @asynccontextmanager

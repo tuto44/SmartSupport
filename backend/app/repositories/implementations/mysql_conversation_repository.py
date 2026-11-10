@@ -107,28 +107,6 @@ class MySQLConversationRepository(IConversationRepository):
             conversation_id, result.rowcount
         )
 
-    def limpiar_estado(self, conversation_id: str) -> None:
-        """
-        Borra explícitamente root_issue y last_context.
-
-        Se usa cuando el incidente se cierra, para que la siguiente consulta
-        no reutilice el manual ni el objetivo de una conversación ya resuelta.
-        """
-        stmt = (
-            update(ConversationModel)
-            .where(ConversationModel.id == conversation_id)
-            .values(
-                root_issue=None,
-                last_context=None,
-                updated_at=datetime.utcnow()
-            )
-        )
-        result = self._session.execute(stmt)
-        logger.info(
-            "[REPOSITORIO] Estado limpiado para '%s' (filas afectadas: %s)",
-            conversation_id, result.rowcount
-        )
-
     def obtener_historial(
         self,
         conversation_id: str,

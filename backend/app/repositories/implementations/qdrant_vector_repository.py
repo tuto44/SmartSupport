@@ -3,55 +3,20 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from app.core.config import settings
 from app.repositories.interfaces.vector_repository import IVectorRepository
-import logging
 
-logger = logging.getLogger(__name__)
 
 class QdrantVectorRepository(IVectorRepository):
     """Implementación de IVectorRepository utilizando QdrantClient."""
 
-    def __init__(
-        self,
-        url: str | None = None,
-        collection_name: str | None = None,
-        api_key: str | None = None
-    ):
+    def __init__(self, url: str | None = None, collection_name: str | None = None):
         self.url = url or settings.QDRANT_URL
         self.collection_name = collection_name or settings.COLLECTION_NAME
-        self.client = QdrantClient(
-            url=self.url,
-            api_key=api_key or settings.QDRANT_API_KEY
-        )
+        self.client = QdrantClient(url=self.url)
 
-    def _dimension_coleccion(self) -> int | None:
-        """Obtiene la dimensión configurada de la colección (None si no aplica)."""
-        try:
-            info = self.client.get_collection(collection_name=self.collection_name)
-            vectores = info.config.params.vectors
-            size = getattr(vectores, "size", None)
-            return int(size) if size is not None else None
-        except Exception:
-            return None
-
-    def crear_coleccion_si_no_existe(
-        self,
-        vector_size: int = settings.EMBEDDING_DIMENSIONS
-    ) -> None:
+    def crear_coleccion_si_no_existe(self, vector_size: int = 768) -> None:
         if self.client.collection_exists(collection_name=self.collection_name):
-            dimension_actual = self._dimension_coleccion()
-            if dimension_actual is not None and dimension_actual != vector_size:
-                logger.warning(
-                    "[QDRANT] Mismatch de dimensiones detectado: actual %d vs esperada %d. "
-                    "Recreando colección '%s' automáticamente.",
-                    dimension_actual, vector_size, self.collection_name
-                )
-                self.client.delete_collection(collection_name=self.collection_name)
-            else:
-                logger.info(
-                    "[QDRANT] Colección '%s' ya existe (dimensión correcta: %d).",
-                    self.collection_name, dimension_actual
-                )
-                return
+            print(f"[QDRANT] Colección '{self.collection_name}' ya existe.")
+            return
 
         self.client.create_collection(
             collection_name=self.collection_name,
@@ -60,11 +25,12 @@ class QdrantVectorRepository(IVectorRepository):
                 distance=models.Distance.COSINE
             )
         )
-        logger.info("[QDRANT] Colección '%s' creada/recreada (dimensión: %d).", self.collection_name, vector_size)
+        print(f"[QDRANT] Colección '{self.collection_name}' creada (dimensión: {vector_size}).")
 
     def obtener_documento(self, document_id: str) -> Optional[dict]:
         if not self.client.collection_exists(collection_name=self.collection_name):
             return None
+
         try:
             puntos, _ = self.client.scroll(
                 collection_name=self.collection_name,
@@ -82,11 +48,11 @@ class QdrantVectorRepository(IVectorRepository):
                 return None
             return puntos[0].payload
         except Exception as e:
-            logger.warning("[QDRANT ERROR] Aviso consultando documento: %s", e)
+            print(f"[QDRANT ERROR] Aviso consultando documento: {e}")
             return None
 
     def guardar_documento(self, documento: Any) -> None:
-        logger.info("[QDRANT] Guardando documento: %s", documento.nombre)
+        print(f"[QDRANT] Guardando documento: {documento.nombre}")
         points = []
         for chunk in documento.chunks:
             point = models.PointStruct(
@@ -107,12 +73,13 @@ class QdrantVectorRepository(IVectorRepository):
             collection_name=self.collection_name,
             points=points
         )
-        logger.info("[QDRANT] Se guardaron %d chunks correctamente.", len(points))
+        print(f"[QDRANT] Se guardaron {len(points)} chunks correctamente.")
 
     def eliminar_documento(self, document_id: str) -> None:
         if not self.client.collection_exists(collection_name=self.collection_name):
             return
-        logger.info("[QDRANT] Eliminando documento: %s", document_id)
+
+        print(f"[QDRANT] Eliminando documento: {document_id}")
         self.client.delete(
             collection_name=self.collection_name,
             points_selector=models.FilterSelector(
@@ -126,22 +93,18 @@ class QdrantVectorRepository(IVectorRepository):
                 )
             )
         )
-        logger.info("[QDRANT] Documento eliminado correctamente.")
+        print("[QDRANT] Documento eliminado correctamente.")
 
     def buscar_similares(self, embedding: List[float], limite: int = settings.TOP_K_RESULTS) -> List[Any]:
         if not self.client.collection_exists(collection_name=self.collection_name):
             return []
-        
-        try:
-            resultados = self.client.query_points(
-                collection_name=self.collection_name,
-                query=embedding,
-                limit=limite
-            )
-            return resultados.points
-        except Exception as e:
-            logger.error("[QDRANT ERROR] Falla en búsqueda de similares: %s", e)
-            return []
+
+        resultados = self.client.query_points(
+            collection_name=self.collection_name,
+            query=embedding,
+            limit=limite
+        )
+        return resultados.points
 
     def obtener_estadisticas(self) -> Optional[Any]:
         if not self.client.collection_exists(collection_name=self.collection_name):

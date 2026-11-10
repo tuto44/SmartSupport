@@ -28,43 +28,6 @@ class Settings(BaseSettings):
         default="gemini-embedding-001",
         description="Identificador del modelo para generación de embeddings"
     )
-    EMBEDDING_DIMENSIONS: int = Field(
-        default=768,
-        description=(
-            "Dimensión de salida de los embeddings. Debe coincidir con la "
-            "configuración de la colección Qdrant."
-        )
-    )
-
-    # Resiliencia y Control de Timeouts
-    REQUEST_TIMEOUT_SECONDS: float = Field(
-        default=28.0,
-        description=(
-            "Tiempo máximo de espera síncrona en el webhook antes de enviar "
-            "la respuesta de rescate controlada a Google Chat (Google Chat timeout = 30s)."
-        )
-    )
-    MAX_RETRIES_LLM: int = Field(
-        default=2,
-        description=(
-            "Número máximo de reintentos para llamadas al LLM ante fallos o "
-            "timeouts. Los intentos totales son MAX_RETRIES_LLM + 1."
-        )
-    )
-    PROCESSING_NOTICE_SECONDS: float = Field(
-        default=4.5,
-        description=(
-            "Umbral de espera tras el cual se envía al usuario un aviso "
-            "proactivo indicando que la petición está tardando más de lo normal."
-        )
-    )
-    BACKGROUND_TIMEOUT_SECONDS: float = Field(
-        default=60.0,
-        description=(
-            "Límite global del procesamiento en background. Al superarse se "
-            "cancela el trabajo y se envía el mensaje de rescate como último recurso."
-        )
-    )
 
     # Qdrant Vector Database
     QDRANT_URL: str = Field(
@@ -84,13 +47,13 @@ class Settings(BaseSettings):
         description="Número máximo de fragmentos a recuperar en similitud"
     )
     MIN_SIMILARITY_SCORE: float = Field(
-        default=0.40,
-        description="Umbral mínimo de similitud coseno (bajado a 0.40 para evitar filtrado excesivo con embeddings de 768 dims)"
+        default=0.65,
+        description="Umbral mínimo de similitud coseno (restrictivo para evitar fragmentos irrelevantes)"
     )
 
     # Documentación Técnica y Chunking
     DOCUMENTS_FOLDER: str = Field(
-        default="../documentos",
+        default="./documentos",
         description="Directorio de manuales técnicos para indexación"
     )
     CHUNK_SIZE: int = Field(
@@ -124,14 +87,10 @@ class Settings(BaseSettings):
         description="Contraseña de MySQL requerida desde variables de entorno"
     )
 
-    # Google Chat / Integración OAuth2 y Seguridad
+    # Google Chat / Integración OAuth2
     CHAT_ACTION_URL: str = Field(
         default="https://barrier-stammer-shush.ngrok-free.dev/api/google-chat",
         description="URL pública de webhook para callbacks interactivos"
-    )
-    GOOGLE_CHAT_PROJECT_NUMBER: str = Field(
-        default="",
-        description="ID Numérico del proyecto en GCP para validar el token JWT entrante (ej. 1234567890)"
     )
     SERVICE_ACCOUNT_FILE: str = Field(
         default=os.path.abspath(

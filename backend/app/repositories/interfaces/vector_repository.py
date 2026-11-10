@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional
-from app.core.config import settings
 from app.domain.models import DocumentFileDomain
 
 
@@ -8,10 +7,7 @@ class IVectorRepository(ABC):
     """Contrato abstracto para el repositorio vectorial."""
 
     @abstractmethod
-    def crear_coleccion_si_no_existe(
-        self,
-        vector_size: int = settings.EMBEDDING_DIMENSIONS
-    ) -> None:
+    def crear_coleccion_si_no_existe(self, vector_size: int = 768) -> None:
         """Crea la colección vectorial si aún no existe."""
         pass
 

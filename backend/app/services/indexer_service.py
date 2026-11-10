@@ -1,5 +1,4 @@
 from typing import Optional
-from app.core.config import settings
 from app.loaders.document_loader import DocumentLoader
 from app.repositories.interfaces.vector_repository import IVectorRepository
 from app.repositories.implementations.qdrant_vector_repository import QdrantVectorRepository
@@ -26,10 +25,7 @@ class IndexerService:
         self.chunk_service = chunk_service or ChunkService()
         self.embedding_service = embedding_service or EmbeddingService()
 
-    def indexar_documentos(
-        self,
-        vector_size: int = settings.EMBEDDING_DIMENSIONS
-    ) -> None:
+    def indexar_documentos(self, vector_size: int = 768) -> None:
         documentos = self.loader.cargar_documentos()
         print(f"\n[INDEXER] Se encontraron {len(documentos)} documentos.\n")
 
