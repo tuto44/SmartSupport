@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import logging
@@ -25,8 +26,8 @@ class GoogleChatService:
     - Envío asíncrono de mensajes y respuestas en hilos/espacios (REST API).
     - Respuesta síncrona en el body HTTP 200 como fallback de alta resiliencia.
     - Gestión precisa de hilos (threads) en DMs vs Spaces.
-    - Descarga autenticada de imágenes adjuntas.
-    - Procesamiento desacoplado del webhook.
+    - Descarga autenticada de imágenes adjuntas vía REST API v1.
+    - Procesamiento desacoplado con reintentos y tolerancia a latencia/fallos.
     """
 
     @staticmethod
@@ -153,42 +154,83 @@ class GoogleChatService:
     async def descargar_imagen_adjunta(self, event: GoogleChatEventDTO) -> Optional[str]:
         attachments = event.get_attachments()
         if not attachments:
+            logger.info("[GOOGLE CHAT] No se encontraron adjuntos en el evento.")
             return None
 
         token = await obtener_token_google_chat()
         if not token:
+            logger.error("[GOOGLE CHAT ERROR] No se pudo obtener el token OAuth2 para descargar la imagen.")
             return None
+
+        logger.info("[GOOGLE CHAT] Se detectaron %d adjunto(s) en el evento.", len(attachments))
 
         for adjunto in attachments:
             content_type = adjunto.contentType or ""
-            resource_name = ""
+            content_name = getattr(adjunto, "contentName", None) or adjunto.name or ""
+            
+            # Extraer la ruta del recurso para la API REST v1
+            resource_path = None
             if adjunto.attachmentDataRef and adjunto.attachmentDataRef.resourceName:
-                resource_name = adjunto.attachmentDataRef.resourceName
+                resource_path = adjunto.attachmentDataRef.resourceName
             elif adjunto.name:
-                resource_name = adjunto.name
+                resource_path = adjunto.name
 
+            # Fallback: construir resource_path usando el ID del mensaje padre
+            if not resource_path:
+                msg_name = event.get_message_name()
+                if msg_name and "spaces/" in msg_name:
+                    att_id = adjunto.name or "attachment"
+                    if "attachments/" in att_id:
+                        att_id = att_id.split("attachments/", 1)[1]
+                    resource_path = f"{msg_name}/attachments/{att_id}"
+
+            if not resource_path:
+                logger.warning("[GOOGLE CHAT ADVERTENCIA] Omitiendo adjunto sin ruta de recurso válida.")
+                continue
+
+            # Validar si el adjunto corresponde a una imagen
             is_image = (
-                content_type.startswith("image/")
-                or any(resource_name.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"])
+                not content_type
+                or content_type.startswith("image/")
+                or content_type == "application/octet-stream"
+                or any(ext in content_name.lower() for ext in [".png", ".jpg", ".jpeg", ".webp"])
+                or any(ext in resource_path.lower() for ext in [".png", ".jpg", ".jpeg", ".webp"])
             )
 
-            if is_image and resource_name:
-                if not content_type:
-                    content_type = "image/jpeg"
+            if not is_image:
+                logger.info("[GOOGLE CHAT] Adjunto omitido por no ser identificado como imagen.")
+                continue
 
-                download_url = f"https://chat.googleapis.com/v1/media/{resource_name}?alt=media"
-                headers = {"Authorization": f"Bearer {token}"}
+            if not content_type or content_type == "application/octet-stream":
+                content_type = "image/jpeg"
 
-                try:
-                    logger.info("[GOOGLE CHAT] Descargando imagen: %s", resource_name)
-                    async with httpx.AsyncClient(timeout=25.0) as client:
-                        response = await client.get(download_url, headers=headers)
-                        if response.status_code == 200:
-                            raw_b64 = base64.b64encode(response.content).decode("utf-8")
-                            logger.info("[GOOGLE CHAT] Imagen descargada y codificada con éxito.")
-                            return f"data:{content_type};base64,{raw_b64}"
-                except Exception as error:
-                    logger.error("[GOOGLE CHAT ERROR] Fallo al descargar imagen: %s", error)
+            # Normalizar el prefijo 'media/' para evitar URLs duplicadas o malformadas
+            clean_res = resource_path.lstrip("/")
+            if clean_res.startswith("media/"):
+                clean_res = clean_res[6:]
+
+            # Endpoint único y definitivo para Service Accounts en Google Chat API v1
+            download_url = f"https://chat.googleapis.com/v1/media/{clean_res}?alt=media"
+            headers = {"Authorization": f"Bearer {token}"}
+
+            try:
+                logger.info("[GOOGLE CHAT] Descargando imagen vía API v1: %s", download_url)
+                async with httpx.AsyncClient(timeout=25.0) as client:
+                    response = await client.get(download_url, headers=headers)
+                    if response.status_code == 200:
+                        raw_b64 = base64.b64encode(response.content).decode("utf-8")
+                        logger.info(
+                            "[GOOGLE CHAT] Imagen descargada y codificada con éxito (%d bytes).",
+                            len(response.content)
+                        )
+                        return f"data:{content_type};base64,{raw_b64}"
+                    else:
+                        logger.warning(
+                            "[GOOGLE CHAT ADVERTENCIA] Status %d desde API v1 (%s): %s",
+                            response.status_code, download_url, response.text[:200]
+                        )
+            except Exception as error:
+                logger.error("[GOOGLE CHAT ERROR] Excepción al descargar desde API v1 (%s): %s", download_url, error)
 
         return None
 
@@ -214,10 +256,6 @@ class GoogleChatService:
         is_in_thread = event.is_in_thread()
 
         # Enrutamiento determinista de hilo:
-        # 1. Si el usuario está explícitamente dentro de un hilo secundario (message_id != thread_id),
-        #    respondemos dentro de ese hilo.
-        # 2. Si el usuario presionó un botón O está en el chat principal, target_thread = None.
-        #    Esto garantiza que la respuesta NUNCA cree un hilo y permanezca en el chat principal.
         target_thread = thread_name if is_in_thread else None
 
         logger.warning(
@@ -239,7 +277,7 @@ class GoogleChatService:
         pregunta = action_params.get("reply") or action_params.get("value") or event.get_text_content()
 
         if is_reset_action or pregunta.lower() in COMANDOS_RESET:
-            conversation_repo.eliminar_conversacion(conversation_id)
+            await asyncio.to_thread(conversation_repo.eliminar_conversacion, conversation_id)
             msg_reset = "🔄 *Contexto reiniciado con éxito.*\n\n¿En qué nuevo tema, problema o requerimiento te puedo ayudar?"
             enviado = await self.enviar_mensaje(
                 space_name=space_name,
@@ -289,8 +327,6 @@ class GoogleChatService:
             mostrar_botones=mostrar_botones
         )
 
-        # Fallback síncrono: Si no se pudo enviar vía REST API (ej. problema de token o red),
-        # retornamos el mensaje en el cuerpo del HTTP 200 respetando el hilo correspondiente.
         if not enviado:
             logger.info("[GOOGLE CHAT] Enviando respuesta de forma síncrona en el body HTTP 200.")
             payload_sync: dict = {"text": respuesta}
@@ -301,3 +337,54 @@ class GoogleChatService:
             return payload_sync
 
         return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}} if is_button else {}
+
+    async def procesar_evento_con_reintentos(
+        self,
+        event: GoogleChatEventDTO,
+        rag_service: Any,
+        conversation_repo: IConversationRepository,
+        max_reintentos: int = 3
+    ) -> None:
+        """
+        Ejecuta el procesamiento del evento en segundo plano con lógica de reintentos
+        y garantía de respuesta al usuario mediante REST API.
+        """
+        space_name, _ = event.get_space()
+        thread_name = event.get_thread_name()
+        is_in_thread = event.is_in_thread()
+        target_thread = thread_name if is_in_thread else None
+
+        intentos = 0
+        exito = False
+
+        while intentos < max_reintentos and not exito:
+            intentos += 1
+            try:
+                logger.info("[RESILIENCIA] Procesando evento (intento %d/%d)...", intentos, max_reintentos)
+                await self.procesar_evento_chat(
+                    event=event,
+                    rag_service=rag_service,
+                    conversation_repo=conversation_repo
+                )
+                exito = True
+            except Exception as error:
+                logger.error(
+                    "[RESILIENCIA ERROR] Fallo en intento %d/%d al procesar evento: %s",
+                    intentos, max_reintentos, error, exc_info=True
+                )
+                if intentos < max_reintentos:
+                    await asyncio.sleep(1.5 * intentos)
+
+        if not exito and space_name:
+            msg_error = (
+                "⚠️ *Inconveniente temporal de conexión*\n\n"
+                "Tuve un problema procesando tu solicitud debido a una alta latencia en los servicios. "
+                "Por favor, intenta enviar tu consulta de nuevo."
+            )
+            logger.warning("[RESILIENCIA] Enviando respuesta de emergencia a %s", space_name)
+            await self.enviar_mensaje(
+                space_name=space_name,
+                thread_name=target_thread,
+                texto=msg_error,
+                mostrar_botones=False
+            )

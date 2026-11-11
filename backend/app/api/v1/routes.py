@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 from app.api.dependencies import (
     get_google_chat_service,
     get_rag_service,
@@ -17,6 +17,7 @@ router = APIRouter()
 @router.post("/google-chat")
 async def google_chat(
     event: GoogleChatEventDTO,
+    background_tasks: BackgroundTasks,
     chat_service: GoogleChatService = Depends(get_google_chat_service),
     rag_service: RagService = Depends(get_rag_service),
     conversation_repo: IConversationRepository = Depends(get_conversation_repository)
@@ -29,8 +30,16 @@ async def google_chat(
         "[WEBHOOK DETECCIÓN] user='%s', space='%s', texto='%s'",
         user, space_name, texto
     )
-    return await chat_service.procesar_evento_chat(
+
+    # Delegar procesamiento completo y reintentos a segundo plano
+    background_tasks.add_task(
+        chat_service.procesar_evento_con_reintentos,
         event=event,
         rag_service=rag_service,
         conversation_repo=conversation_repo
     )
+
+    # Para procesamiento asíncrono vía REST API, retornar un JSON vacío {} con HTTP 200
+    # le confirma a Google Chat la recepción del webhook tanto para texto como para botones
+    # sin activar ningún mensaje de error visual en la interfaz.
+    return {}

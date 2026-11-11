@@ -13,7 +13,7 @@ class QdrantVectorRepository(IVectorRepository):
         self.collection_name = collection_name or settings.COLLECTION_NAME
         self.client = QdrantClient(url=self.url)
 
-    def crear_coleccion_si_no_existe(self, vector_size: int = 768) -> None:
+    def crear_coleccion_si_no_existe(self, vector_size: int = 3072) -> None:
         if self.client.collection_exists(collection_name=self.collection_name):
             print(f"[QDRANT] Colección '{self.collection_name}' ya existe.")
             return

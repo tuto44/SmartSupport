@@ -25,7 +25,7 @@ class IndexerService:
         self.chunk_service = chunk_service or ChunkService()
         self.embedding_service = embedding_service or EmbeddingService()
 
-    def indexar_documentos(self, vector_size: int = 768) -> None:
+    def indexar_documentos(self, vector_size: int = 3072) -> None:
         documentos = self.loader.cargar_documentos()
         print(f"\n[INDEXER] Se encontraron {len(documentos)} documentos.\n")
 

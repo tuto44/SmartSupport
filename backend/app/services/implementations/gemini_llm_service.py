@@ -49,6 +49,9 @@ class GeminiLLMService(ILLMService):
 
     async def extraer_descripcion_imagen(self, image_base64: str) -> str:
         """Extrae términos técnicos clave de la captura mediante LLM multimodal."""
+        if not image_base64:
+            return ""
+
         try:
             image_data_uri = (
                 image_base64
@@ -57,8 +60,7 @@ class GeminiLLMService(ILLMService):
             )
             prompt_extraccion = (
                 "Actúa como un analizador técnico de TI. Observa esta imagen y responde en 1 sola línea breve: "
-                "el nombre del software o sistema involucrado y el mensaje o código de error textual exacto. "
-                "Responde únicamente palabras clave técnicas concisas."
+                "el nombre del software o sistema involucrado y el mensaje o código de error textual exacto."
             )
             mensaje = HumanMessage(
                 content=[
@@ -66,18 +68,20 @@ class GeminiLLMService(ILLMService):
                     {"type": "image_url", "image_url": {"url": image_data_uri}}
                 ]
             )
+        
+            # Ejecutar invoke con manejo de excepción de conexión
             res = await asyncio.to_thread(self._llm.invoke, [mensaje])
+        
             texto_respuesta = res.content
             if isinstance(texto_respuesta, list):
                 texto_respuesta = "".join(
-                    b if isinstance(b, str) else b.get("text", "")
-                    for b in texto_respuesta
+                    b if isinstance(b, str) else b.get("text", "") for b in texto_respuesta
                 )
             descripcion = str(texto_respuesta).strip()
             logger.info("[GeminiLLMService] Términos técnicos extraídos de imagen: %s", descripcion)
             return descripcion
         except Exception as exc:
-            logger.warning("[GeminiLLMService] No se pudo analizar la imagen: %s", exc)
+            logger.warning("[GeminiLLMService] No se pudo analizar la imagen (error de red/stream): %s", exc)
             return ""
 
     # ------------------------------------------------------------------ #

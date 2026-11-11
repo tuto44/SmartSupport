@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------ #
-#  Extractores Recursivos de Resiliencia para Google Chat             #
+#   Extractores Recursivos de Resiliencia para Google Chat             #
 # ------------------------------------------------------------------ #
 
 def _extract_space_recursive(data: Any) -> str:
@@ -89,8 +89,33 @@ def _extract_thread_recursive(data: Any) -> str:
     return ""
 
 
+def _extract_attachments_recursive(data: Any) -> List[dict]:
+    """Busca recursivamente cualquier lista u objeto de adjuntos ('attachment' o 'attachments')."""
+    results = []
+    if isinstance(data, dict):
+        for key in ["attachment", "attachments"]:
+            val = data.get(key)
+            if isinstance(val, list):
+                for item in val:
+                    if isinstance(item, dict):
+                        results.append(item)
+            elif isinstance(val, dict):
+                results.append(val)
+        for k, v in data.items():
+            if k not in {"actionResponse", "cardsV2", "cards"}:
+                extracted = _extract_attachments_recursive(v)
+                if extracted:
+                    results.extend(extracted)
+    elif isinstance(data, list):
+        for item in data:
+            extracted = _extract_attachments_recursive(item)
+            if extracted:
+                results.extend(extracted)
+    return results
+
+
 # ------------------------------------------------------------------ #
-#  Modelos de Esquema Pydantic Tipados                                #
+#   Modelos de Esquema Pydantic Tipados                               #
 # ------------------------------------------------------------------ #
 
 class BaseChatModel(BaseModel):
@@ -120,7 +145,9 @@ class AttachmentDataRef(BaseChatModel):
 
 class AttachmentSchema(BaseChatModel):
     name: Optional[str] = None
+    contentName: Optional[str] = None
     contentType: Optional[str] = None
+    downloadUri: Optional[str] = None
     attachmentDataRef: Optional[AttachmentDataRef] = None
 
 
@@ -372,6 +399,15 @@ class GoogleChatWebhookEvent(BaseChatModel):
                 atts.extend(self.chat.messagePayload.attachment)
             if self.chat.messagePayload.attachments:
                 atts.extend(self.chat.messagePayload.attachments)
+
+        # Fallback recursivo sobre todo el JSON recibido si el modelo no mapeó los adjuntos
+        if not atts and self.raw_payload:
+            raw_atts = _extract_attachments_recursive(self.raw_payload)
+            for item in raw_atts:
+                try:
+                    atts.append(AttachmentSchema(**item))
+                except Exception:
+                    pass
         return atts
 
     def get_text_content(self) -> str:
