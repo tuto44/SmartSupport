@@ -27,8 +27,6 @@ FRASES_RECUPERACION = {
     "ya tengo red", "ya dio ip", "ya conecto internet"
 }
 
-# Expresiones que indican que el usuario confirmó el cierre exitoso del incidente.
-# Cuando se detectan, se limpia el estado y se retorna una despedida sin más pasos técnicos.
 FRASES_EXITO = {
     "ya funcionó", "ya funciono", "ya sirvió", "ya sirvio",
     "ya pude", "ya pude entrar", "ya quedó", "ya quedo",
@@ -64,7 +62,7 @@ class RagService:
         self.llm_service = llm_service
 
     # ------------------------------------------------------------------ #
-    #  Recuperación de Contexto Vectorial                                  #
+    #  Recuperación de Contexto Vectorial                                #
     # ------------------------------------------------------------------ #
 
     async def recuperar_contexto(
@@ -72,7 +70,7 @@ class RagService:
         pregunta: str,
         limite: int = settings.TOP_K_RESULTS
     ) -> Optional[str]:
-        """Recupera fragmentos de manuales técnicos con umbral de similitud estricto."""
+        """Recupera fragmentos de manuales técnicos filtrando por umbral de similitud."""
         logger.info("[RAG] Búsqueda vectorial para: '%s'", pregunta)
         embedding = await self.llm_service.generar_embedding(pregunta)
         resultados = await asyncio.to_thread(
@@ -85,8 +83,7 @@ class RagService:
         contexto = []
         for resultado in resultados:
             score = getattr(resultado, "score", 0.0)
-            # Solo se incluyen fragmentos que superen el umbral MIN_SIMILARITY_SCORE (0.65).
-            # Fragmentos con score menor se descartan para evitar alucinaciones.
+            # Evaluar umbral MIN_SIMILARITY_SCORE (0.45)
             if score < settings.MIN_SIMILARITY_SCORE:
                 logger.info(
                     "[RAG] Fragmento descartado por similitud insuficiente: score=%.3f (umbral=%.2f)",
@@ -101,7 +98,7 @@ class RagService:
         return "\n\n".join(contexto) if contexto else None
 
     # ------------------------------------------------------------------ #
-    #  Ciclo principal de respuesta                                        #
+    #  Ciclo principal de respuesta                                       #
     # ------------------------------------------------------------------ #
 
     async def responder(
@@ -150,9 +147,7 @@ class RagService:
             c for c in pregunta_limpia if c.isalnum() or c.isspace()
         ).strip()
 
-        # — Detección de cierre exitoso de incidente (MÁXIMA PRIORIDAD) —
-        # Si el usuario confirma que el problema se resolvió, se limpia el estado
-        # y se retorna una despedida cordial sin más pasos técnicos (mostrar_botones=False).
+        # — Detección de cierre exitoso de incidente —
         if any(frase in pregunta_limpia for frase in FRASES_EXITO):
             logger.info("[RAG] Cierre de incidente detectado para: %s", user_name)
             despedida = (
@@ -160,7 +155,6 @@ class RagService:
                 "Si en el futuro tienes otra consulta técnica, aquí estaré para ayudarte. "
                 "¡Que tengas un excelente día!"
             )
-            # Limpiar estado de la conversación para no arrastrar contexto a futuras consultas
             await asyncio.to_thread(
                 self.conversation_repo.actualizar_estado_conversacion,
                 conversation_id, None, None
@@ -206,14 +200,22 @@ class RagService:
             )
             logger.info("[RAG] Objetivo raíz establecido: %s", root_issue)
 
-        # — Estrategia de búsqueda —
+        # — Reformulación Contextual de Consultas (Contextual Query Rewriting) —
         resolvio_bloqueo = any(frase in pregunta_limpia for frase in FRASES_RECUPERACION)
 
         if resolvio_bloqueo and root_issue:
-            logger.info("[RAG] Resolución de bloqueo detectada. Retomando objetivo raíz...")
+            logger.info("[RAG] Resolución de bloqueo detectada. Reformulando consulta con el objetivo raíz...")
             consulta_busqueda: Optional[str] = f"{root_issue} pasos solución"
-        elif es_respuesta_corta:
-            consulta_busqueda = None
+        elif root_issue and (es_respuesta_corta or len(pregunta.split()) <= 5):
+            logger.info("[RAG] Reformulación Contextual: Enriqueciendo consulta con Root Issue...")
+            consulta_busqueda = f"{root_issue} {pregunta}".strip()
+        elif root_issue:
+            consulta_busqueda = f"{root_issue} {pregunta}".strip()
+        elif es_respuesta_corta and historial:
+            logger.info("[RAG] Reformulación Contextual: Enriqueciendo consulta con historial previo...")
+            mensajes_usuario = [m.content for m in historial if getattr(m, "role", "") == "user"]
+            ultimo_mensaje = mensajes_usuario[-1] if mensajes_usuario else ""
+            consulta_busqueda = f"{ultimo_mensaje} {pregunta}".strip()
         elif descripcion_imagen:
             consulta_busqueda = f"{pregunta} {descripcion_imagen}".strip()
         else:
@@ -231,16 +233,6 @@ class RagService:
         elif last_context:
             logger.info("[RAG] Reutilizando manual activo guardado en base de datos.")
             contexto = last_context
-        elif es_respuesta_corta and historial:
-            logger.info("[RAG] Reconstruyendo contexto desde historial previo...")
-            mensajes_previos = [m.content for m in historial if m.role == "user"]
-            if mensajes_previos:
-                contexto = await self.recuperar_contexto(pregunta=mensajes_previos[-1])
-                if contexto:
-                    await asyncio.to_thread(
-                        self.conversation_repo.actualizar_estado_conversacion,
-                        conversation_id, None, contexto
-                    )
         elif image_base64:
             contexto = (
                 "No se encontró un manual específico en la base de conocimientos. "
@@ -254,7 +246,7 @@ class RagService:
                 "oficial del Asistente TI.\n\n"
                 "Para obtener soporte especializado, te recomiendo:\n"
                 "1. 📋 Generar un ticket en **My Whirlpool** > *IT Service Catalog* > **Something's Broken**\n"
-                "2. 📞 Contactar a la **Mesa de Ayuda Nivel 2** directamente\n\n"
+                "2. 📞 Contactar al **Departamento de TI de HWI** o a la Mesa de Ayuda directamente.\n\n"
                 "Un agente de soporte especializado podrá asistirte con este requerimiento."
             )
             await asyncio.to_thread(

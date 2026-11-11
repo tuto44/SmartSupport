@@ -47,8 +47,8 @@ class Settings(BaseSettings):
         description="Número máximo de fragmentos a recuperar en similitud"
     )
     MIN_SIMILARITY_SCORE: float = Field(
-        default=0.65,
-        description="Umbral mínimo de similitud coseno (restrictivo para evitar fragmentos irrelevantes)"
+        default=0.45,
+        description="Umbral mínimo de similitud coseno (calibrado a 0.45 para optimizar recall en búsquedas semánticas)"
     )
 
     # Documentación Técnica y Chunking
@@ -118,7 +118,7 @@ class Settings(BaseSettings):
         return (
             f"mysql+mysqlconnector://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}"
             f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DATABASE}"
-            "?charset=utf8mb4"
+            f"?charset=utf8mb4"
         )
 
 

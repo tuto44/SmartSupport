@@ -8,6 +8,7 @@ import httpx
 from app.core.config import settings
 from app.core.security import obtener_token_google_chat
 from app.schemas.google_chat import GoogleChatEventDTO
+from app.utils.format_utils import formatear_para_google_chat
 from app.repositories.interfaces.conversation_repository import IConversationRepository
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,7 @@ class GoogleChatService:
             logger.warning("[GOOGLE CHAT] No se envió mensaje vía REST API: space_name ausente.")
         if not token or not space_name:
             return False
+        texto_formateado = formatear_para_google_chat(texto)
 
         url = f"https://chat.googleapis.com/v1/{space_name}/messages"
         headers = {
@@ -129,7 +131,7 @@ class GoogleChatService:
             "Content-Type": "application/json"
         }
 
-        payload: dict = {"text": texto}
+        payload: dict = {"text": texto_formateado}
         params: dict = {}
 
         if thread_name:
