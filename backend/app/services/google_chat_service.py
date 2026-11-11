@@ -167,7 +167,7 @@ class GoogleChatService:
         for adjunto in attachments:
             content_type = adjunto.contentType or ""
             content_name = getattr(adjunto, "contentName", None) or adjunto.name or ""
-            
+
             # Extraer la ruta del recurso para la API REST v1
             resource_path = None
             if adjunto.attachmentDataRef and adjunto.attachmentDataRef.resourceName:
@@ -270,6 +270,26 @@ class GoogleChatService:
             user_id=user_id
         )
 
+        if event.is_added_to_space():
+            msg_bienvenida = (
+                f"¡Hola, {user_name}! 👋 Soy **SmartSupport**, Asistente Técnico de TI Nivel 1.\n\n"
+                "Estoy aquí para ayudarte con guías paso a paso e incidentes en sistemas como "
+                "VPN (GlobalProtect/FortiClient), WPASS, Citrix, SAP, cuentas y soporte HWI.\n\n"
+                "¿En qué problema o requerimiento te puedo ayudar hoy?"
+            )
+            enviado = await self.enviar_mensaje(
+                space_name=space_name,
+                thread_name=target_thread,
+                texto=msg_bienvenida,
+                mostrar_botones=False
+            )
+            if not enviado:
+                payload_sync = {"text": msg_bienvenida}
+                if target_thread:
+                    payload_sync["thread"] = {"name": target_thread}
+                return payload_sync
+            return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}} if is_button else {}
+
         is_reset_action = (
             invoked_function in {"reset", "reset_context"}
             or action_params.get("action") in {"reset", "reset_context"}
@@ -295,15 +315,20 @@ class GoogleChatService:
         image_base64 = await self.descargar_imagen_adjunta(event)
 
         if not pregunta and not image_base64:
-            msg_vacio = "No recibí ninguna pregunta ni imagen adjunta."
+            msg_bienvenida = (
+                f"¡Hola, {user_name}! 👋 Soy **SmartSupport**, Asistente Técnico de TI Nivel 1.\n\n"
+                "Estoy aquí para ayudarte con guías paso a paso e incidentes en sistemas como "
+                "VPN (GlobalProtect/FortiClient), WPASS, Citrix, SAP, cuentas y soporte HWI.\n\n"
+                "¿En qué problema o requerimiento te puedo ayudar hoy?"
+            )
             enviado = await self.enviar_mensaje(
                 space_name=space_name,
                 thread_name=target_thread,
-                texto=msg_vacio,
+                texto=msg_bienvenida,
                 mostrar_botones=False
             )
             if not enviado:
-                payload_sync = {"text": msg_vacio}
+                payload_sync = {"text": msg_bienvenida}
                 if target_thread:
                     payload_sync["thread"] = {"name": target_thread}
                 return payload_sync

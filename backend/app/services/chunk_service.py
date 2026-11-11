@@ -6,7 +6,9 @@ from app.utils.hash_utils import generar_chunk_id
 class ChunkService:
     def __init__(self):
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=settings.CHUNK_SIZE, chunk_overlap=settings.CHUNK_OVERLAP)
+            chunk_size=settings.CHUNK_SIZE, 
+            chunk_overlap=settings.CHUNK_OVERLAP
+        )
         
     def generar_chunks(self, documento: DocumentFileDomain):
         print(f"Generando chunks para: {documento.nombre}")
@@ -14,6 +16,10 @@ class ChunkService:
         chunks = self.text_splitter.split_documents(documento.documentos)
         
         for indice, chunk in enumerate(chunks):
+            # Enriquecer el contenido del chunk con el manual de origen
+            contenido_enriquecido = f"DOCUMENTO / MANUAL: {documento.nombre}\n\n{chunk.page_content}"
+            chunk.page_content = contenido_enriquecido
+
             pagina = chunk.metadata.get("page")
             document_chunk = DocumentChunkDomain(
                 document=chunk,
@@ -22,4 +28,4 @@ class ChunkService:
                 page=pagina
             )
             documento.chunks.append(document_chunk)
-        print(f"Se generaron {len(documento.chunks)}")
+        print(f"Se generaron {len(documento.chunks)} chunks enriquecidos.")

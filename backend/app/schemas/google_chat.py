@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------ #
-#   Extractores Recursivos de Resiliencia para Google Chat             #
+#   Extractores Recursivos de Resiliencia para Google Chat           #
 # ------------------------------------------------------------------ #
 
 def _extract_space_recursive(data: Any) -> str:
@@ -115,7 +115,7 @@ def _extract_attachments_recursive(data: Any) -> List[dict]:
 
 
 # ------------------------------------------------------------------ #
-#   Modelos de Esquema Pydantic Tipados                               #
+#   Modelos de Esquema Pydantic Tipados                              #
 # ------------------------------------------------------------------ #
 
 class BaseChatModel(BaseModel):
@@ -206,6 +206,14 @@ class GoogleChatWebhookEvent(BaseChatModel):
             # Preservar el payload completo para fallbacks recursivos
             data["_raw_payload"] = dict(data)
         return data
+
+    def is_added_to_space(self) -> bool:
+        """Indica si el evento corresponde a la instalación o incorporación del bot a un espacio/DM."""
+        if self.type == "ADDED_TO_SPACE":
+            return True
+        if self.raw_payload and self.raw_payload.get("type") == "ADDED_TO_SPACE":
+            return True
+        return False
 
     def get_user_display_name(self) -> str:
         candidates = [

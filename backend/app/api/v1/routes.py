@@ -31,7 +31,25 @@ async def google_chat(
         user, space_name, texto
     )
 
-    # Delegar procesamiento completo y reintentos a segundo plano
+    # 1. Evento de Instalación / Adición al espacio (ADDED_TO_SPACE):
+    # Responder de forma síncrona en el HTTP 200 para evitar el error 403 de la REST API al instalar.
+    if event.is_added_to_space():
+        thread_name = event.get_thread_name()
+        target_thread = thread_name if event.is_in_thread() else None
+
+        msg_bienvenida = (
+            f"¡Hola, {user}! 👋 Soy **SmartSupport**, Asistente Técnico de TI Nivel 1.\n\n"
+            "Estoy aquí para ayudarte con guías paso a paso e incidentes en sistemas como "
+            "VPN (GlobalProtect/FortiClient), WPASS, Citrix, SAP, cuentas y soporte HWI.\n\n"
+            "¿En qué problema o requerimiento te puedo ayudar hoy?"
+        )
+
+        payload_sync = {"text": msg_bienvenida}
+        if target_thread:
+            payload_sync["thread"] = {"name": target_thread}
+        return payload_sync
+
+    # 2. Delegar procesamiento completo de consultas y RAG a segundo plano
     background_tasks.add_task(
         chat_service.procesar_evento_con_reintentos,
         event=event,
@@ -39,7 +57,5 @@ async def google_chat(
         conversation_repo=conversation_repo
     )
 
-    # Para procesamiento asíncrono vía REST API, retornar un JSON vacío {} con HTTP 200
-    # le confirma a Google Chat la recepción del webhook tanto para texto como para botones
-    # sin activar ningún mensaje de error visual en la interfaz.
+    # Retornar JSON vacío {} con HTTP 200 le confirma a Google Chat la recepción del webhook
     return {}
