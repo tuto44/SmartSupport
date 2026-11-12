@@ -46,8 +46,7 @@ class RagService:
 
     Principios aplicados:
     - SRP: exclusivamente orquesta RAG; no gestiona HTTP ni persistencia directa.
-    - DIP: recibe contratos abstractos (IConversationRepository, IVectorRepository,
-           ILLMService) inyectados en el constructor.
+    - DIP: recibe contratos abstractos (IConversationRepository, IVectorRepository, ILLMService) inyectados en el constructor.
     - Todas las operaciones I/O bloqueantes se delegan a asyncio.to_thread.
     """
 
@@ -70,7 +69,7 @@ class RagService:
         pregunta: str,
         limite: int = settings.TOP_K_RESULTS
     ) -> Optional[str]:
-        """Recupera fragmentos de manuales técnicos filtrando por umbral de similitud."""
+        """Recupera fragmentos de manuales técnicos filtrando estrictamente por umbral de similitud."""
         logger.info("[RAG] Búsqueda vectorial para: '%s'", pregunta)
         embedding = await self.llm_service.generar_embedding(pregunta)
         resultados = await asyncio.to_thread(
@@ -80,15 +79,19 @@ class RagService:
         if not resultados:
             return None
 
+        # Validación de confianza: comprobar el score del mejor resultado (Top 1)
+        top_score = getattr(resultados[0], "score", 0.0)
+        if top_score < settings.MIN_SIMILARITY_SCORE:
+            logger.info(
+                "[RAG] Consulta sin coincidencia relevante en base de conocimiento. Top Score=%.3f (Umbral=%.2f)",
+                top_score, settings.MIN_SIMILARITY_SCORE
+            )
+            return None
+
         contexto = []
         for resultado in resultados:
             score = getattr(resultado, "score", 0.0)
-            # Evaluar umbral MIN_SIMILARITY_SCORE (0.45)
             if score < settings.MIN_SIMILARITY_SCORE:
-                logger.info(
-                    "[RAG] Fragmento descartado por similitud insuficiente: score=%.3f (umbral=%.2f)",
-                    score, settings.MIN_SIMILARITY_SCORE
-                )
                 continue
             payload = getattr(resultado, "payload", {}) or {}
             contenido = payload.get("page_content")
@@ -191,14 +194,9 @@ class RagService:
             or (len(pregunta.split()) <= 2 and bool(historial))
         )
 
-        # — Establecer objetivo raíz —
+        # — Establecer o evaluar objetivo raíz —
         if not root_issue and not es_respuesta_corta and len(pregunta.split()) >= 3:
             root_issue = f"{pregunta} {descripcion_imagen}".strip()
-            await asyncio.to_thread(
-                self.conversation_repo.actualizar_estado_conversacion,
-                conversation_id, root_issue, None
-            )
-            logger.info("[RAG] Objetivo raíz establecido: %s", root_issue)
 
         # — Reformulación Contextual de Consultas (Contextual Query Rewriting) —
         resolvio_bloqueo = any(frase in pregunta_limpia for frase in FRASES_RECUPERACION)
@@ -206,16 +204,9 @@ class RagService:
         if resolvio_bloqueo and root_issue:
             logger.info("[RAG] Resolución de bloqueo detectada. Reformulando consulta con el objetivo raíz...")
             consulta_busqueda: Optional[str] = f"{root_issue} pasos solución"
-        elif root_issue and (es_respuesta_corta or len(pregunta.split()) <= 5):
-            logger.info("[RAG] Reformulación Contextual: Enriqueciendo consulta con Root Issue...")
+        elif es_respuesta_corta and root_issue:
+            logger.info("[RAG] Reformulación Contextual: Enriqueciendo respuesta corta con Root Issue...")
             consulta_busqueda = f"{root_issue} {pregunta}".strip()
-        elif root_issue:
-            consulta_busqueda = f"{root_issue} {pregunta}".strip()
-        elif es_respuesta_corta and historial:
-            logger.info("[RAG] Reformulación Contextual: Enriqueciendo consulta con historial previo...")
-            mensajes_usuario = [m.content for m in historial if getattr(m, "role", "") == "user"]
-            ultimo_mensaje = mensajes_usuario[-1] if mensajes_usuario else ""
-            consulta_busqueda = f"{ultimo_mensaje} {pregunta}".strip()
         elif descripcion_imagen:
             consulta_busqueda = f"{pregunta} {descripcion_imagen}".strip()
         else:
@@ -225,29 +216,24 @@ class RagService:
         if consulta_busqueda:
             contexto = await self.recuperar_contexto(pregunta=consulta_busqueda)
 
+        # Si se encontró contexto válido, actualizar el estado de la conversación
         if contexto:
             await asyncio.to_thread(
                 self.conversation_repo.actualizar_estado_conversacion,
-                conversation_id, None, contexto
+                conversation_id, root_issue, contexto
             )
-        elif last_context:
-            logger.info("[RAG] Reutilizando manual activo guardado en base de datos.")
+        elif last_context and es_respuesta_corta:
+            logger.info("[RAG] Reutilizando manual activo guardado en base de datos para seguimiento corto.")
             contexto = last_context
-        elif image_base64:
-            contexto = (
-                "No se encontró un manual específico en la base de conocimientos. "
-                "Diagnostica el problema técnico analizando visualmente la imagen adjunta."
-            )
 
         # — Sin contexto disponible: derivación formal —
         if not contexto:
             respuesta_sin_doc = (
-                "⚠️ No encontré un procedimiento específico para tu consulta en la base de conocimiento "
-                "oficial del Asistente TI.\n\n"
-                "Para obtener soporte especializado, te recomiendo:\n"
-                "1. 📋 Generar un ticket en **My Whirlpool** > *IT Service Catalog* > **Something's Broken**\n"
-                "2. 📞 Contactar al **Departamento de TI de HWI** o a la Mesa de Ayuda directamente.\n\n"
-                "Un agente de soporte especializado podrá asistirte con este requerimiento."
+                f"⚠️ Hola, {user_name}. No encontré un procedimiento o manual oficial en la base de conocimientos "
+                f"relacionado con **{pregunta}**.\n\n"
+                "Para obtener asistencia con esta solicitud, te sugiero:\n"
+                "1. 📋 Generar un ticket en el portal **My Whirlpool** (*IT Service Catalog* > **Something's Broken** / **Submit an Incident**).\n"
+                "2. 📞 Escalar el caso directamente con la Mesa de Ayuda de TI Nivel 2 o el **Departamento de TI de HWI**."
             )
             await asyncio.to_thread(
                 self.conversation_repo.agregar_mensaje,

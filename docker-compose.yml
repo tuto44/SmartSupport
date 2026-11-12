@@ -67,6 +67,7 @@ services:
       - MYSQL_USER=${MYSQL_USER:-root}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-root_password}
       - QDRANT_URL=http://qdrant:6333
+      - DOCUMENTS_FOLDER=/app/documentos
     ports:
       - "8000:8000"
     volumes:

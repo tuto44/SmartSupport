@@ -47,7 +47,7 @@ class Settings(BaseSettings):
         description="Número máximo de fragmentos a recuperar en similitud"
     )
     MIN_SIMILARITY_SCORE: float = Field(
-        default=0.45,
+        default=0.52,
         description="Umbral mínimo de similitud coseno (calibrado a 0.45 para optimizar recall en búsquedas semánticas)"
     )
 
