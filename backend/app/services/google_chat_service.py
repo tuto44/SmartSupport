@@ -274,10 +274,11 @@ class GoogleChatService:
 
         if event.is_added_to_space():
             msg_bienvenida = (
-                f"¡Hola, {user_name}! 👋 Soy **SmartSupport**, Asistente Técnico de TI Nivel 1.\n\n"
-                "Estoy aquí para ayudarte con guías paso a paso e incidentes en sistemas como "
-                "VPN (GlobalProtect/FortiClient), WPASS, Citrix, SAP, cuentas y soporte HWI.\n\n"
-                "¿En qué problema o requerimiento te puedo ayudar hoy?"
+                f"¡Hola, {user}! 👋 Soy **GABI** (*Guía y Asistencia Business Intelligent*), "
+            "tu asistente virtual en HWI.\n\n"
+            "Estoy aquí para acompañarte con guías paso a paso, consultas y soporte en tus procesos y "
+            "herramientas (como VPN, WPASS, Citrix, SAP, accesos y gestión general).\n\n"
+            "¿En qué te puedo ayudar hoy?"
             )
             enviado = await self.enviar_mensaje(
                 space_name=space_name,

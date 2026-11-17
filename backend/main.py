@@ -16,9 +16,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Asistente Inteligente TI",
+    title="GABI - Guía y Asistencia Business Intelligent",
     version="2.0.0",
-    description="Backend para SmartSupport - Asistente de TI Nivel 1 con Clean Architecture",
+    description="Backend para GABI - Asistente Virtual Corporativo HWI",
     lifespan=lifespan
 )
 

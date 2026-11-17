@@ -175,9 +175,9 @@ class RagService:
         # — Saludo inicial —
         if pregunta_normalizada in SALUDOS and not historial:
             respuesta_saludo = (
-                f"¡Hola, {user_name}! 👋\n\n"
-                "Soy tu Asistente Técnico de TI Nivel 1. ¿En qué problema, sistema o requerimiento "
-                "(VPN, WPass, Citrix, correo, accesos, impresoras) te puedo ayudar hoy?"
+                f"¡Hola, {user_name}! 👋 Soy **GABI** (*Guía y Asistencia Business Intelligent*).\n\n"
+                "Estoy aquí para ayudarte con guías paso a paso, procesos o soporte técnico "
+                "(VPN, WPass, Citrix, SAP, accesos, correo, impresoras y más). ¿En qué te puedo ayudar hoy?"
             )
             await asyncio.to_thread(
                 self.conversation_repo.agregar_mensaje,
