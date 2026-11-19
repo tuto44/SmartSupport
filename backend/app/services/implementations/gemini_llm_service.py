@@ -27,11 +27,12 @@ class GeminiLLMService(ILLMService):
         )
         self._llm = ChatGoogleGenerativeAI(
             model=settings.CHAT_MODEL,
-            temperature=0.2,
+            temperature=0.1,
+            top_p=0.9,
             google_api_key=settings.GOOGLE_API_KEY or None
         )
         logger.info(
-            "[GeminiLLMService] Inicializado con modelo de chat '%s' y embeddings '%s'.",
+            "[GeminiLLMService] Inicializado con modelo de chat '%s' (temp=0.1, top_p=0.9) y embeddings '%s'.",
             settings.CHAT_MODEL, settings.EMBEDDING_MODEL
         )
 

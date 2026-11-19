@@ -57,11 +57,11 @@ class Settings(BaseSettings):
         description="Directorio de manuales técnicos para indexación"
     )
     CHUNK_SIZE: int = Field(
-        default=500,
+        default=1100,
         description="Cantidad máxima de caracteres por chunk"
     )
     CHUNK_OVERLAP: int = Field(
-        default=100,
+        default=200,
         description="Solapamiento de caracteres entre chunks consecutivos"
     )
 

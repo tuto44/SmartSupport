@@ -6,8 +6,22 @@ from app.utils.hash_utils import generar_chunk_id
 class ChunkService:
     def __init__(self):
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=settings.CHUNK_SIZE, 
-            chunk_overlap=settings.CHUNK_OVERLAP
+            chunk_size=settings.CHUNK_SIZE,
+            chunk_overlap=settings.CHUNK_OVERLAP,
+            separators=[
+                "\n## ",
+                "\n### ",
+                "\n#### ",
+                "\n\n",
+                "\n1. ",
+                "\n2. ",
+                "\n3. ",
+                "\n- ",
+                "\n* ",
+                "\n",
+                " ",
+                ""
+            ]
         )
         
     def generar_chunks(self, documento: DocumentFileDomain):

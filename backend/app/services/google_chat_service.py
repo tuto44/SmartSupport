@@ -32,6 +32,16 @@ class GoogleChatService:
     """
 
     @staticmethod
+    def _mensaje_bienvenida(user_name: str) -> str:
+        return (
+            f"¡Hola, {user_name}! 👋 Soy **GABI** (*Guía y Asistencia Business Intelligent*), "
+            "tu asistente virtual en HWI.\n\n"
+            "Estoy aquí para acompañarte con guías paso a paso, consultas y soporte en tus procesos y "
+            "herramientas (como VPN, WPASS, Citrix, SAP, accesos y gestión general).\n\n"
+            "¿En qué te puedo ayudar hoy?"
+        )
+
+    @staticmethod
     def calcular_conversation_id(space_type: str, space_name: str, thread_name: str, user_id: str) -> str:
         if space_type == "DM" and space_name:
             hash_space = hashlib.sha256(space_name.encode("utf-8")).hexdigest()
@@ -273,13 +283,7 @@ class GoogleChatService:
         )
 
         if event.is_added_to_space():
-            msg_bienvenida = (
-                f"¡Hola, {user}! 👋 Soy **GABI** (*Guía y Asistencia Business Intelligent*), "
-            "tu asistente virtual en HWI.\n\n"
-            "Estoy aquí para acompañarte con guías paso a paso, consultas y soporte en tus procesos y "
-            "herramientas (como VPN, WPASS, Citrix, SAP, accesos y gestión general).\n\n"
-            "¿En qué te puedo ayudar hoy?"
-            )
+            msg_bienvenida = self._mensaje_bienvenida(user_name)
             enviado = await self.enviar_mensaje(
                 space_name=space_name,
                 thread_name=target_thread,
@@ -318,12 +322,7 @@ class GoogleChatService:
         image_base64 = await self.descargar_imagen_adjunta(event)
 
         if not pregunta and not image_base64:
-            msg_bienvenida = (
-                f"¡Hola, {user_name}! 👋 Soy **SmartSupport**, Asistente Técnico de TI Nivel 1.\n\n"
-                "Estoy aquí para ayudarte con guías paso a paso e incidentes en sistemas como "
-                "VPN (GlobalProtect/FortiClient), WPASS, Citrix, SAP, cuentas y soporte HWI.\n\n"
-                "¿En qué problema o requerimiento te puedo ayudar hoy?"
-            )
+            msg_bienvenida = self._mensaje_bienvenida(user_name)
             enviado = await self.enviar_mensaje(
                 space_name=space_name,
                 thread_name=target_thread,
