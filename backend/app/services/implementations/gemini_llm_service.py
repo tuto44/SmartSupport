@@ -10,17 +10,14 @@ from app.services.interfaces.llm_service import ILLMService
 
 logger = logging.getLogger(__name__)
 
-LLM_TIMEOUT_SECONDS = 25.0
+LLM_TIMEOUT_SECONDS = 20.0
 EMBEDDING_TIMEOUT_SECONDS = 15.0
 
 
 class GeminiLLMService(ILLMService):
     """
-    Implementación de ILLMService que delega en los modelos Gemini de Google
-    a través de langchain-google-genai.
-
-    Toda operación de red (embed_query, invoke) se ejecuta en un thread pool
-    mediante asyncio.to_thread con timeout explícito para no bloquear el event loop.
+    Implementación de ILLMService con failover automático entre modelos Gemini
+    ante errores transitorios de alta demanda (503/504/429) o timeouts.
     """
 
     def __init__(self) -> None:
@@ -28,18 +25,64 @@ class GeminiLLMService(ILLMService):
             model=settings.EMBEDDING_MODEL,
             google_api_key=settings.GOOGLE_API_KEY or None
         )
-        self._llm = ChatGoogleGenerativeAI(
-            model=settings.CHAT_MODEL,
-            temperature=0.1,
-            top_p=0.9,
-            max_retries=1,
-            timeout=20.0,
-            google_api_key=settings.GOOGLE_API_KEY or None
-        )
+        modelos_cadena = [settings.CHAT_MODEL] + settings.fallback_models_list
+        self._llms: list[tuple[str, ChatGoogleGenerativeAI]] = [
+            (nombre_modelo, self._crear_cliente_chat(nombre_modelo))
+            for nombre_modelo in modelos_cadena
+        ]
         logger.info(
-            "[GeminiLLMService] Inicializado con modelo de chat '%s' (timeout=20s, max_retries=1) y embeddings '%s'.",
-            settings.CHAT_MODEL, settings.EMBEDDING_MODEL
+            "[GeminiLLMService] Inicializado con cadena de modelos=%s y embeddings='%s'.",
+            modelos_cadena, settings.EMBEDDING_MODEL
         )
+
+    @staticmethod
+    def _crear_cliente_chat(model_name: str) -> ChatGoogleGenerativeAI:
+        kwargs: dict = {
+            "model": model_name,
+            "max_retries": 0,
+            "timeout": 18.0,
+            "google_api_key": settings.GOOGLE_API_KEY or None,
+        }
+        if "3.5" not in model_name:
+            kwargs["temperature"] = 0.1
+            kwargs["top_p"] = 0.9
+        return ChatGoogleGenerativeAI(**kwargs)
+
+    @staticmethod
+    def _es_error_conmutable(exc: Exception) -> bool:
+        texto = str(exc).upper()
+        return any(
+            token in texto
+            for token in (
+                "503", "UNAVAILABLE",
+                "504", "DEADLINE_EXCEEDED",
+                "429", "RESOURCE_EXHAUSTED",
+                "404", "NOT_FOUND",
+                "TIMEOUT", "DISCONNECTED"
+            )
+        )
+
+    async def _invocar_con_fallback(self, mensaje: HumanMessage):
+        ultimo_error: Optional[Exception] = None
+        for idx, (nombre_modelo, cliente_llm) in enumerate(self._llms):
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(cliente_llm.invoke, [mensaje]),
+                    timeout=LLM_TIMEOUT_SECONDS
+                )
+            except Exception as exc:
+                ultimo_error = exc
+                hay_siguiente = idx < len(self._llms) - 1
+                if hay_siguiente and self._es_error_conmutable(exc):
+                    logger.warning(
+                        "[GeminiLLMService] Modelo '%s' no disponible (%s). Conmutando a '%s'...",
+                        nombre_modelo, type(exc).__name__, self._llms[idx + 1][0]
+                    )
+                    continue
+                raise
+
+        if ultimo_error:
+            raise ultimo_error
 
     # ------------------------------------------------------------------ #
     #  ILLMService — Embeddings                                            #
@@ -83,10 +126,7 @@ class GeminiLLMService(ILLMService):
                 ]
             )
 
-            res = await asyncio.wait_for(
-                asyncio.to_thread(self._llm.invoke, [mensaje]),
-                timeout=LLM_TIMEOUT_SECONDS
-            )
+            res = await self._invocar_con_fallback(mensaje)
 
             texto_respuesta = res.content
             if isinstance(texto_respuesta, list):
@@ -97,7 +137,7 @@ class GeminiLLMService(ILLMService):
             logger.info("[GeminiLLMService] Términos técnicos extraídos de imagen: %s", descripcion)
             return descripcion
         except Exception as exc:
-            logger.warning("[GeminiLLMService] No se pudo analizar la imagen (error de red/timeout): %s", exc)
+            logger.warning("[GeminiLLMService] No se pudo analizar la imagen: %s", exc)
             return ""
 
     # ------------------------------------------------------------------ #
@@ -105,7 +145,7 @@ class GeminiLLMService(ILLMService):
     # ------------------------------------------------------------------ #
 
     async def generar_respuesta(self, prompt: str, image_base64: Optional[str] = None) -> str:
-        """Genera la respuesta del asistente con timeout explícito. Soporta entrada multimodal opcional."""
+        """Genera la respuesta del asistente con failover automático entre modelos."""
         if image_base64:
             image_data_uri = (
                 image_base64
@@ -120,10 +160,7 @@ class GeminiLLMService(ILLMService):
             mensaje_llm = HumanMessage(content=prompt)
 
         try:
-            respuesta_llm = await asyncio.wait_for(
-                asyncio.to_thread(self._llm.invoke, [mensaje_llm]),
-                timeout=LLM_TIMEOUT_SECONDS
-            )
+            respuesta_llm = await self._invocar_con_fallback(mensaje_llm)
         except asyncio.TimeoutError as exc:
             raise TimeoutError(
                 f"Tiempo de espera agotado ({LLM_TIMEOUT_SECONDS}s) esperando respuesta de Gemini."

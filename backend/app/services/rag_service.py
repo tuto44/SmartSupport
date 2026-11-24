@@ -25,9 +25,9 @@ class RagService:
     Servicio de orquestación del ciclo RAG (Retrieval-Augmented Generation).
 
     Principios aplicados:
-- SRP: exclusivamente orquesta RAG; no gestiona HTTP ni persistencia directa.
-- DIP: recibe contratos abstractos (IConversationRepository, IVectorRepository, ILLMService) inyectados en el constructor.
-- Todas las operaciones I/O bloqueantes se delegan a asyncio.to_thread.
+    - SRP: exclusivamente orquesta RAG; no gestiona HTTP ni persistencia directa.
+    - DIP: recibe contratos abstractos (IConversationRepository, IVectorRepository, ILLMService) inyectados en el constructor.
+    - Todas las operaciones I/O bloqueantes se delegan a asyncio.to_thread.
     """
 
     def __init__(
@@ -103,8 +103,9 @@ class RagService:
             ultimo_mensaje_asistente=ultimo_asistente
         )
 
+        salida_cruda = await self.llm_service.generar_respuesta(prompt_cls)
+
         try:
-            salida_cruda = await self.llm_service.generar_respuesta(prompt_cls)
             salida_limpia = limpiar_razonamiento_interno(salida_cruda)
             match_json = re.search(r"\{.*\}", salida_limpia, flags=re.DOTALL)
             if match_json:
@@ -120,7 +121,7 @@ class RagService:
                     "reconsultar_qdrant": reconsultar,
                     "consultas_busqueda": consultas or [pregunta],
                 }
-        except Exception as err:
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError) as err:
             logger.warning("[RAG ROUTER] Fallback a consulta técnica por error parseando intención: %s", err)
 
         return {

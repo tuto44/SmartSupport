@@ -22,7 +22,11 @@ class Settings(BaseSettings):
     )
     CHAT_MODEL: str = Field(
         default="gemini-3.5-flash-lite",
-        description="Identificador del modelo generativo multimodal"
+        description="Identificador del modelo generativo principal"
+    )
+    FALLBACK_CHAT_MODELS: str = Field(
+        default="gemini-3.1-flash-lite",
+        description="Modelos Gemini de respaldo separados por coma ante errores 503/504/429"
     )
     EMBEDDING_MODEL: str = Field(
         default="gemini-embedding-001",
@@ -48,7 +52,7 @@ class Settings(BaseSettings):
     )
     MIN_SIMILARITY_SCORE: float = Field(
         default=0.60,
-        description="Umbral mínimo de similitud coseno (calibrado a 0.45 para optimizar recall en búsquedas semánticas)"
+        description="Umbral mínimo de similitud coseno para evitar falsos positivos fuera de dominio"
     )
 
     # Documentación Técnica y Chunking
@@ -123,6 +127,14 @@ class Settings(BaseSettings):
                 "La variable de entorno 'GOOGLE_API_KEY' es obligatoria para la operación del Asistente y LLM."
             )
         return v.strip()
+
+    @property
+    def fallback_models_list(self) -> list[str]:
+        return [
+            m.strip()
+            for m in self.FALLBACK_CHAT_MODELS.split(",")
+            if m.strip() and m.strip() != self.CHAT_MODEL
+        ]
 
     @property
     def database_url(self) -> str:
