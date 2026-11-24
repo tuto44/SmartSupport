@@ -1,9 +1,14 @@
 import asyncio
+import json
 import logging
 import re
-from typing import List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
-from app.prompts.system_prompt import construir_prompt
+from app.prompts.system_prompt import (
+    construir_prompt,
+    construir_prompt_bienvenida,
+    construir_prompt_clasificador,
+)
 from app.repositories.interfaces.conversation_repository import IConversationRepository
 from app.repositories.interfaces.vector_repository import IVectorRepository
 from app.services.interfaces.llm_service import ILLMService
@@ -14,45 +19,15 @@ logger = logging.getLogger(__name__)
 
 BOOST_MANUAL_ACTIVO = 0.08
 
-SALUDOS = {
-    "hola", "buenas", "buen dia", "buen día", "buenos dias", "buenos días",
-    "buenas tardes", "buenas noches", "hey", "saludos", "hola!", "que tal", "qué tal", "iniciar"
-}
-
-RESPUESTAS_SEGUIMIENTO = {
-    "si", "sí", "no", "ya", "ya lo hice", "listo", "no funcionó",
-    "no me deja", "ok", "vale", "ya está", "ya termine", "ya terminé",
-    "funciono", "funcionó", "siguiente", "continuar", "sigue igual",
-    "ya entré", "ya entre", "ya abre", "ya carga", "ya cargó",
-    "ya pude", "ya pude entrar"
-}
-
-FRASES_RECUPERACION = {
-    "ya tengo internet", "ya cargo", "ya cargó", "ya navega",
-    "ya volvio el internet", "ya volvió el internet", "ya conecto el wifi",
-    "ya tengo red", "ya dio ip", "ya conecto internet"
-}
-
-FRASES_EXITO = {
-    "ya funcionó", "ya funciono", "ya sirvió", "ya sirvio",
-    "ya quedó", "ya quedo",
-    "listo ya quedó", "listo ya quedo", "perfecto gracias",
-    "solucionado", "gracias funciono", "gracias funcionó",
-    "problema resuelto", "ya lo resolví", "ya lo resolvi",
-    "muchas gracias", "excelente gracias", "todo bien gracias",
-    "ya está resuelto", "ya esta resuelto", "listo gracias",
-    "ya se solucionó", "ya se soluciono", "ya quedó listo"
-}
-
 
 class RagService:
     """
     Servicio de orquestación del ciclo RAG (Retrieval-Augmented Generation).
 
     Principios aplicados:
-    - SRP: exclusivamente orquesta RAG; no gestiona HTTP ni persistencia directa.
-    - DIP: recibe contratos abstractos (IConversationRepository, IVectorRepository, ILLMService) inyectados en el constructor.
-    - Todas las operaciones I/O bloqueantes se delegan a asyncio.to_thread.
+- SRP: exclusivamente orquesta RAG; no gestiona HTTP ni persistencia directa.
+- DIP: recibe contratos abstractos (IConversationRepository, IVectorRepository, ILLMService) inyectados en el constructor.
+- Todas las operaciones I/O bloqueantes se delegan a asyncio.to_thread.
     """
 
     def __init__(
@@ -66,7 +41,7 @@ class RagService:
         self.llm_service = llm_service
 
     # ------------------------------------------------------------------ #
-    #  Utilidades de Extracción y Descomposición                          #
+    #  Utilidades de Extracción y Clasificación con LLM                   #
     # ------------------------------------------------------------------ #
 
     @staticmethod
@@ -78,33 +53,81 @@ class RagService:
         return {doc.strip() for doc in encontrados if doc.strip()}
 
     @staticmethod
-    def _descomponer_consulta_compuesta(consulta: str) -> List[str]:
+    def _extraer_tipo_pregunta(respuesta_cruda: str) -> str:
         """
-        Divide consultas compuestas con problemas dobles en un máximo de 2 sub-consultas
-        de al menos 2 palabras cada una. Solo opera si la consulta tiene >= 6 palabras y no
-        es una respuesta corta de seguimiento.
+        Extrae la clasificación TIPO_PREGUNTA (CERRADA o ABIERTA) emitida dentro
+        del bloque <razonamiento> antes de limpiarlo.
         """
-        if not consulta:
-            return []
+        if not respuesta_cruda:
+            return "cerrada"
+        match = re.search(
+            r"TIPO_PREGUNTA\s*:\s*(CERRADA|ABIERTA)",
+            respuesta_cruda,
+            flags=re.IGNORECASE
+        )
+        if match and match.group(1).upper() == "ABIERTA":
+            return "abierta"
+        return "cerrada"
 
-        palabras = consulta.strip().split()
-        if len(palabras) < 6:
-            return [consulta.strip()]
+    async def _clasificar_intencion(
+        self,
+        pregunta: str,
+        historial: list,
+        last_context: Optional[str],
+        root_issue: Optional[str],
+        tiene_imagen: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Delega al LLM la clasificación semántica de la intención del usuario
+        para enrutar sin depender de listas estáticas de palabras.
+        """
+        if tiene_imagen:
+            return {
+                "intencion": "NUEVA_CONSULTA_TECNICA",
+                "reconsultar_qdrant": True,
+                "consultas_busqueda": [pregunta],
+            }
 
-        consulta_limpia = consulta.strip().lower()
-        if consulta_limpia in RESPUESTAS_SEGUIMIENTO:
-            return [consulta.strip()]
+        ultimo_asistente = None
+        for msg in reversed(historial):
+            rol = getattr(msg, "role", None) or (msg.get("role") if isinstance(msg, dict) else "")
+            if rol == "assistant":
+                ultimo_asistente = getattr(msg, "content", None) or (msg.get("content") if isinstance(msg, dict) else "")
+                break
 
-        conectores = ["y tampoco", "y además", "pero tampoco", "y no", " y ", ", "]
-        for conector in conectores:
-            partes = re.split(re.escape(conector), consulta, maxsplit=1, flags=re.IGNORECASE)
-            if len(partes) == 2:
-                sub1 = partes[0].strip()
-                sub2 = partes[1].strip()
-                if len(sub1.split()) >= 2 and len(sub2.split()) >= 2:
-                    return [sub1, sub2]
+        prompt_cls = construir_prompt_clasificador(
+            pregunta=pregunta,
+            tiene_historial=bool(historial),
+            tiene_contexto_activo=bool(last_context),
+            root_issue=root_issue,
+            ultimo_mensaje_asistente=ultimo_asistente
+        )
 
-        return [consulta.strip()]
+        try:
+            salida_cruda = await self.llm_service.generar_respuesta(prompt_cls)
+            salida_limpia = limpiar_razonamiento_interno(salida_cruda)
+            match_json = re.search(r"\{.*\}", salida_limpia, flags=re.DOTALL)
+            if match_json:
+                data = json.loads(match_json.group(0))
+                intencion = str(data.get("intencion", "NUEVA_CONSULTA_TECNICA")).strip().upper()
+                reconsultar = bool(data.get("reconsultar_qdrant", False))
+                consultas = data.get("consultas_busqueda") or [pregunta]
+                if not isinstance(consultas, list) or not consultas:
+                    consultas = [pregunta]
+                consultas = [str(c).strip() for c in consultas[:2] if str(c).strip()]
+                return {
+                    "intencion": intencion,
+                    "reconsultar_qdrant": reconsultar,
+                    "consultas_busqueda": consultas or [pregunta],
+                }
+        except Exception as err:
+            logger.warning("[RAG ROUTER] Fallback a consulta técnica por error parseando intención: %s", err)
+
+        return {
+            "intencion": "NUEVA_CONSULTA_TECNICA",
+            "reconsultar_qdrant": True,
+            "consultas_busqueda": [pregunta],
+        }
 
     # ------------------------------------------------------------------ #
     #  Recuperación de Contexto Vectorial con Re-ranking                 #
@@ -132,7 +155,6 @@ class RagService:
         if not resultados:
             return None
 
-        # Validación de confianza: comprobar el score del mejor resultado (Top 1)
         top_score = getattr(resultados[0], "score", 0.0)
         if top_score < settings.MIN_SIMILARITY_SCORE:
             logger.info(
@@ -161,11 +183,9 @@ class RagService:
         if not candidatos_validos:
             return None
 
-        # Single-Manual Lock: restringir todos los fragmentos al documento ganador
         if bloquear_manual_top:
             top_payload = getattr(resultados[0], "payload", {}) or {}
             doc_objetivo = top_payload.get("document_name", "")
-            # Si hay exactamente 1 manual activo y está entre los válidos, forzarlo
             if manuales_activos and len(manuales_activos) == 1:
                 nombre_activo = next(iter(manuales_activos))
                 nombres_validos = {c[2] for c in candidatos_validos if c[2]}
@@ -193,32 +213,31 @@ class RagService:
         user_id: str,
         user_name: str,
         pregunta: str,
-        image_base64: Optional[str] = None
-    ) -> tuple[str, bool]:
-        """Orquesta el ciclo completo de RAG con Gemini y persistencia atómica."""
+        image_base64: Optional[str] = None,
+        space_name: Optional[str] = None,
+        thread_name: Optional[str] = None
+    ) -> tuple[str, str]:
+        """
+        Orquesta el ciclo completo de RAG con Gemini y persistencia atómica.
+        Retorna (respuesta_texto, modo_botones) donde modo_botones es 'cerrada', 'abierta' o 'ninguno'.
+        """
         logger.info(
             "[RAG] Consulta recibida — usuario: %s (%s): %s",
             user_name, conversation_id, pregunta
         )
 
-        title = pregunta[:30] + ("..." if len(pregunta) > 30 else "")
-        await asyncio.to_thread(
-            self.conversation_repo.crear_o_actualizar_conversacion,
-            conversation_id, user_id, user_name, title
+        # — Validar expiración por inactividad —
+        expirada = await asyncio.to_thread(
+            self.conversation_repo.expirar_conversacion_si_inactiva,
+            conversation_id,
+            settings.CONVERSATION_TIMEOUT_MINUTES
+        )
+        prefijo_inactividad = (
+            "🕒 *Tu conversación anterior se reinició por tiempo de inactividad.*\n\n"
+            if expirada else ""
         )
 
-        # — Análisis de imagen adjunta —
-        descripcion_imagen = ""
-        if image_base64:
-            descripcion_imagen = await self.llm_service.extraer_descripcion_imagen(image_base64)
-
-        mensaje_usuario_bd = (
-            f"[Imagen: {descripcion_imagen}] {pregunta}".strip()
-            if (image_base64 and descripcion_imagen)
-            else f"[Imagen adjunta] {pregunta}".strip() if image_base64 else pregunta
-        )
-
-        # — Recuperar historial y estado —
+        # — Leer historial y estado previo sin ensuciar la BD todavía —
         historial = await asyncio.to_thread(
             self.conversation_repo.obtener_historial, conversation_id, 8
         )
@@ -229,13 +248,37 @@ class RagService:
         last_context = estado_conv.last_context
         manuales_activos = self._extraer_manuales_activos(last_context)
 
-        pregunta_limpia = pregunta.strip().lower()
-        pregunta_normalizada = "".join(
-            c for c in pregunta_limpia if c.isalnum() or c.isspace()
-        ).strip()
+        # — Clasificar intención mediante LLM —
+        ruta = await self._clasificar_intencion(
+            pregunta=pregunta,
+            historial=historial,
+            last_context=last_context,
+            root_issue=root_issue,
+            tiene_imagen=bool(image_base64)
+        )
+        intencion = ruta["intencion"]
+        logger.info("[RAG ROUTER] Intención=%s | Reconsultar=%s | Consultas=%s", intencion, ruta["reconsultar_qdrant"], ruta["consultas_busqueda"])
 
-        # — Detección de cierre exitoso de incidente —
-        if any(frase in pregunta_limpia for frase in FRASES_EXITO):
+        # 1. Confirmación o respuesta corta suelta cuando NO hay conversación activa
+        if intencion == "CONFIRMACION_SIN_CONTEXTO":
+            aviso = (
+                prefijo_inactividad
+                or "Todavía no tenemos un tema o consulta activa. "
+            )
+            return (
+                f"{aviso}Por favor, indícame en qué proceso, sistema o inconveniente te puedo ayudar.",
+                "ninguno"
+            )
+
+        # Asegurar registro de conversación para flujos con estado
+        title = pregunta[:30] + ("..." if len(pregunta) > 30 else "")
+        await asyncio.to_thread(
+            self.conversation_repo.crear_o_actualizar_conversacion,
+            conversation_id, user_id, user_name, title
+        )
+
+        # 2. Cierre exitoso del caso
+        if intencion == "CIERRE_EXITOSO":
             logger.info("[RAG] Cierre de incidente detectado para: %s", user_name)
             despedida = (
                 f"¡Excelente, {user_name}! 🎉 Me alegra mucho que hayas podido resolver el inconveniente. "
@@ -254,17 +297,21 @@ class RagService:
                 self.conversation_repo.agregar_mensaje,
                 conversation_id, user_id, user_name, "assistant", despedida
             )
-            return despedida, False
+            return f"{prefijo_inactividad}{despedida}", "ninguno"
 
-        # — Saludo inicial —
-        if pregunta_normalizada in SALUDOS and not historial:
-            respuesta_saludo = (
-                f"¡Hola, {user_name}! 👋 Soy **GABI** (*Guía y Asistencia Business Intelligent*), "
-                "tu asistente virtual en HWI.\n\n"
-                "Estoy aquí para acompañarte con guías paso a paso, consultas y soporte en tus procesos y "
-                "herramientas (como VPN, WPASS, Citrix, SAP, accesos y gestión general).\n\n"
-                "¿En qué te puedo ayudar hoy?"
+        # 3. Bienvenida dinámica o consulta sobre capacidades reales
+        if intencion == "SALUDO_O_CAPACIDADES":
+            manuales_disponibles = await asyncio.to_thread(
+                self.vector_repo.listar_documentos_indexados
             )
+            prompt_bienvenida = construir_prompt_bienvenida(
+                usuario=user_name,
+                manuales_disponibles=manuales_disponibles,
+                correo_ti=settings.TI_HWI_EMAIL,
+                tiene_historial=bool(historial)
+            )
+            respuesta_cruda = await self.llm_service.generar_respuesta(prompt_bienvenida)
+            respuesta_saludo = limpiar_razonamiento_interno(respuesta_cruda)
             await asyncio.to_thread(
                 self.conversation_repo.agregar_mensaje,
                 conversation_id, user_id, user_name, "user", pregunta
@@ -273,45 +320,41 @@ class RagService:
                 self.conversation_repo.agregar_mensaje,
                 conversation_id, user_id, user_name, "assistant", respuesta_saludo
             )
-            return respuesta_saludo, False
+            return f"{prefijo_inactividad}{respuesta_saludo}", "ninguno"
 
-        es_respuesta_corta = (
-            pregunta_limpia in RESPUESTAS_SEGUIMIENTO
-            or any(frase in pregunta_limpia for frase in (
-                "ya entré", "ya entre", "ya ingresé", "ya ingrese",
-                "ya abrí", "ya abri", "ya cargó", "ya cargo", "ya pude", "listo ya"
-            ))
-            or (len(pregunta.split()) <= 2 and bool(historial))
-            or (len(pregunta.split()) <= 6 and bool(historial) and any(
-                p in pregunta_limpia for p in ("listo", "ya", "enlace", "link", "página", "pagina", "pantalla", "paso")
-            ))
+        # — Análisis de imagen adjunta —
+        descripcion_imagen = ""
+        if image_base64:
+            descripcion_imagen = await self.llm_service.extraer_descripcion_imagen(image_base64)
+
+        mensaje_usuario_bd = (
+            f"[Imagen: {descripcion_imagen}] {pregunta}".strip()
+            if (image_base64 and descripcion_imagen)
+            else f"[Imagen adjunta] {pregunta}".strip() if image_base64 else pregunta
         )
 
-        # — Establecer o evaluar objetivo raíz —
-        if not root_issue and not es_respuesta_corta and len(pregunta.split()) >= 3:
+        # 4. Gestión de Root Issue y Recuperación de Contexto
+        es_seguimiento = (intencion == "SEGUIMIENTO_ACTIVO")
+
+        if not es_seguimiento:
+            # Si es una nueva consulta técnica (o cambio de tema), actualizar objetivo raíz y liberar bloqueo viejo
+            root_issue = f"{pregunta} {descripcion_imagen}".strip()
+            manuales_activos = set()
+        elif not root_issue:
             root_issue = f"{pregunta} {descripcion_imagen}".strip()
 
-        # — Reformulación Contextual de Consultas (Contextual Query Rewriting) —
-        resolvio_bloqueo = any(frase in pregunta_limpia for frase in FRASES_RECUPERACION)
-
-        if resolvio_bloqueo and root_issue:
-            logger.info("[RAG] Resolución de bloqueo detectada. Reformulando consulta con el objetivo raíz...")
-            consulta_busqueda: Optional[str] = f"{root_issue} pasos solución"
-        elif es_respuesta_corta and root_issue:
-            logger.info("[RAG] Reformulación Contextual: Enriqueciendo respuesta corta con Root Issue...")
-            consulta_busqueda = f"{root_issue} {pregunta}".strip()
-        elif descripcion_imagen:
-            consulta_busqueda = f"{pregunta} {descripcion_imagen}".strip()
-        else:
-            consulta_busqueda = pregunta
-
-        # Reutilizar last_context directamente en seguimientos cortos (evita contaminación cruzada con Qdrant)
         contexto: Optional[str] = None
-        if es_respuesta_corta and last_context and not resolvio_bloqueo:
-            logger.info("[RAG] Seguimiento corto detectado: reutilizando manual activo bloqueado en MySQL sin re-consultar Qdrant.")
+        reutilizando_contexto = False
+
+        if es_seguimiento and last_context and not ruta["reconsultar_qdrant"]:
+            logger.info("[RAG] Seguimiento activo: reutilizando manual bloqueado en MySQL sin re-consultar Qdrant.")
             contexto = last_context
-        elif consulta_busqueda:
-            sub_consultas = self._descomponer_consulta_compuesta(consulta_busqueda)
+            reutilizando_contexto = True
+        else:
+            sub_consultas = ruta["consultas_busqueda"]
+            if descripcion_imagen and len(sub_consultas) == 1:
+                sub_consultas = [f"{sub_consultas[0]} {descripcion_imagen}".strip()]
+
             if len(sub_consultas) > 1:
                 logger.info("[RAG] Multi-Query paralelo detectado: %s", sub_consultas)
                 tareas = [
@@ -332,7 +375,7 @@ class RagService:
                 contexto = "\n\n".join(fragmentos_unicos) if fragmentos_unicos else None
             else:
                 contexto = await self.recuperar_contexto(
-                    pregunta=consulta_busqueda,
+                    pregunta=sub_consultas[0],
                     manuales_activos=manuales_activos
                 )
 
@@ -340,7 +383,7 @@ class RagService:
         if contexto and any(
             ref in contexto.lower()
             for ref in ("manual específico", "resincronización", "desbloqueo de aplicaciones")
-        ) and "[access.whirlpool.com/wpass](https://access.whirlpool.com/wpass)" not in contexto.lower():
+        ) and "access.whirlpool.com/wpass" not in contexto.lower():
             logger.info("[RAG] Referencia cruzada detectada. Recuperando manual complementario de WPASS...")
             contexto_extra = await self.recuperar_contexto(
                 pregunta="resincronización y desbloqueo de aplicaciones en WPASS",
@@ -349,21 +392,20 @@ class RagService:
             if contexto_extra:
                 contexto = f"{contexto}\n\n{contexto_extra}"
 
-        # Si se encontró contexto válido (nuevo, no reutilizado), actualizar el estado de la conversación
-        if contexto and not (es_respuesta_corta and last_context and not resolvio_bloqueo):
+        # Actualizar estado de conversación si se recuperó contexto nuevo
+        if contexto and not reutilizando_contexto:
             await asyncio.to_thread(
                 self.conversation_repo.actualizar_estado_conversacion,
                 conversation_id, root_issue, contexto
             )
 
-        # — Sin contexto disponible: derivación formal —
+        # — Sin contexto disponible: derivación directa al Encargado de TI sin inventar —
         if not contexto:
             respuesta_sin_doc = (
-                f"⚠️ Hola, {user_name}. No encontré un procedimiento o manual oficial en la base de conocimientos "
-                f"relacionado con **{pregunta}**.\n\n"
-                "Para avanzar con tu solicitud, te sugiero escalarla según el sistema correspondiente:\n"
-                "• **Ecosistema Whirlpool** (WPASS, SAP, Citrix, cuenta Gmail): genera un ticket en el portal **ServiceNow** (https://whirlpool.service-now.com/sp) según aplique (Incidente o Requerimiento).\n"
-                "• **Ecosistema HWI (Local)** (FortiClient, red local HWI, equipos locales, impresoras, dispositivos personales): contacta directamente al **Encargado de TI de HWI**."
+                f"No tengo conocimiento ni información oficial en mi base de datos sobre **{pregunta}**, "
+                "por lo que no puedo darte un procedimiento para este caso.\n\n"
+                f"Por favor, comunícate directamente con el **Encargado de TI de HWI** al correo **{settings.TI_HWI_EMAIL}** para que te brinden soporte"
+                " (o si se trata de una falla o solicitud en un sistema de Whirlpool como SAP, WPASS o Citrix, puedes gestionar un ticket en **ServiceNow**: https://whirlpool.service-now.com/sp)."
             )
             await asyncio.to_thread(
                 self.conversation_repo.agregar_mensaje,
@@ -373,7 +415,7 @@ class RagService:
                 self.conversation_repo.agregar_mensaje,
                 conversation_id, user_id, user_name, "assistant", respuesta_sin_doc
             )
-            return respuesta_sin_doc, False
+            return f"{prefijo_inactividad}{respuesta_sin_doc}", "ninguno"
 
         # — Construir prompt y generar respuesta —
         prompt = construir_prompt(
@@ -381,12 +423,14 @@ class RagService:
             pregunta=pregunta,
             contexto=contexto,
             historial=historial,
-            root_issue=root_issue
+            root_issue=root_issue,
+            correo_ti=settings.TI_HWI_EMAIL
         )
 
         respuesta_cruda = await self.llm_service.generar_respuesta(prompt, image_base64)
+        modo_botones = self._extraer_tipo_pregunta(respuesta_cruda)
         respuesta = limpiar_razonamiento_interno(respuesta_cruda)
-        logger.debug("[COT INTERNO] %s", respuesta_cruda)
+        logger.debug("[COT INTERNO] (botones=%s) %s", modo_botones, respuesta_cruda)
 
         await asyncio.to_thread(
             self.conversation_repo.agregar_mensaje,
@@ -397,5 +441,5 @@ class RagService:
             conversation_id, user_id, user_name, "assistant", respuesta
         )
 
-        logger.info("[RAG] Respuesta generada y persistida exitosamente.")
-        return respuesta, True
+        logger.info("[RAG] Respuesta generada y persistida exitosamente (modo_botones=%s).", modo_botones)
+        return f"{prefijo_inactividad}{respuesta}", modo_botones

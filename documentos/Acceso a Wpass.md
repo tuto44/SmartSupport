@@ -5,6 +5,7 @@ Para comenzar, acceda al siguiente enlace oficial: [Portal Wpass Whirlpool](http
 
 ## 2. Autenticación de Usuario
 Introduzca sus credenciales corporativas (nombre de usuario y contraseña) en los campos correspondientes y seleccione el botón **Iniciar sesión**.
+Si no recuerda su usuario recuerda que es tu apellido pero la ultima letra es la primera de tu nombre.
 
 ## 3. Verificación de Seguridad (MFA)
 El sistema solicitará una verificación de identidad adicional. Seleccione la opción **“Recibir un código por SMS”** para continuar.

@@ -197,3 +197,27 @@ class MySQLConversationRepository(IConversationRepository):
             "[REPOSITORIO] Conversación '%s' eliminada con su historial asociado.",
             conversation_id
         )
+
+    def expirar_conversacion_si_inactiva(self, conversation_id: str, timeout_minutos: int) -> bool:
+        """
+        Verifica si la conversación superó el tiempo máximo de inactividad (updated_at).
+        Si expiró, elimina la conversación y su historial y retorna True.
+        """
+        stmt = select(ConversationModel.updated_at).where(
+            ConversationModel.id == conversation_id
+        )
+        updated_at = self._session.execute(stmt).scalar_one_or_none()
+        if not updated_at:
+            return False
+
+        inactividad_segundos = (datetime.utcnow() - updated_at).total_seconds()
+        if inactividad_segundos > (timeout_minutos * 60):
+            logger.info(
+                "[REPOSITORIO] Conversación '%s' expirada por inactividad (%.1f min > %d min).",
+                conversation_id, inactividad_segundos / 60.0, timeout_minutos
+            )
+            self.eliminar_conversacion(conversation_id)
+            self._session.flush()
+            return True
+
+        return False

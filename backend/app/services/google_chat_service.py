@@ -23,8 +23,9 @@ COMANDOS_RESET = {
 class GoogleChatService:
     """
     Servicio de integración y orquestación para Google Chat:
-    - Construcción de cards y botones interactivos V2.
+    - Construcción de cards y botones interactivos V2 dinámicos.
     - Envío asíncrono de mensajes y respuestas en hilos/espacios (REST API).
+    - Indicador visual único de procesamiento ('⏳ Analizando tu consulta...') actualizado in-place vía PATCH.
     - Respuesta síncrona en el body HTTP 200 como fallback de alta resiliencia.
     - Gestión precisa de hilos (threads) en DMs vs Spaces.
     - Descarga autenticada de imágenes adjuntas vía REST API v1.
@@ -35,10 +36,9 @@ class GoogleChatService:
     def _mensaje_bienvenida(user_name: str) -> str:
         return (
             f"¡Hola, {user_name}! 👋 Soy **GABI** (*Guía y Asistencia Business Intelligent*), "
-            "tu asistente virtual en HWI.\n\n"
-            "Estoy aquí para acompañarte con guías paso a paso, consultas y soporte en tus procesos y "
-            "herramientas (como VPN, WPASS, Citrix, SAP, accesos y gestión general).\n\n"
-            "¿En qué te puedo ayudar hoy?"
+            "tu asistente virtual corporativo de soporte TI en HWI.\n\n"
+            "Estoy aquí para guiarte paso a paso con los procedimientos técnicos oficiales de la compañía. "
+            "Escríbeme tu consulta directamente o pregúntame *¿en qué me puedes ayudar?* para mostrarte los manuales disponibles."
         )
 
     @staticmethod
@@ -56,7 +56,63 @@ class GoogleChatService:
             return f"gchat_user_{user_id}"
 
     @staticmethod
-    def construir_cards_v2() -> list:
+    def construir_cards_v2(modo_botones: str | bool = "cerrada") -> list:
+        """
+        Construye botones dinámicos según el tipo de pregunta del asistente:
+        - 'cerrada' (o True): [✅ Sí, ❌ No, 🔄 Cambiar tema]
+        - 'abierta': [🔄 Cambiar tema]
+        - 'ninguno' (o False): []
+        """
+        if isinstance(modo_botones, bool):
+            modo = "cerrada" if modo_botones else "ninguno"
+        else:
+            modo = (modo_botones or "ninguno").strip().lower()
+
+        if modo == "ninguno":
+            return []
+
+        botones = []
+        if modo == "cerrada":
+            botones.extend([
+                {
+                    "text": "✅ Sí",
+                    "onClick": {
+                        "action": {
+                            "function": settings.CHAT_ACTION_URL,
+                            "parameters": [
+                                {"key": "action", "value": "quick_reply"},
+                                {"key": "reply", "value": "Sí"}
+                            ]
+                        }
+                    }
+                },
+                {
+                    "text": "❌ No",
+                    "onClick": {
+                        "action": {
+                            "function": settings.CHAT_ACTION_URL,
+                            "parameters": [
+                                {"key": "action", "value": "quick_reply"},
+                                {"key": "reply", "value": "No"}
+                            ]
+                        }
+                    }
+                }
+            ])
+
+        botones.append({
+            "text": "🔄 Cambiar tema",
+            "onClick": {
+                "action": {
+                    "function": settings.CHAT_ACTION_URL,
+                    "parameters": [
+                        {"key": "action", "value": "reset"},
+                        {"key": "reply", "value": "Cambiar tema"}
+                    ]
+                }
+            }
+        })
+
         unique_card_id = f"actions_{int(time.time() * 1000)}"
         return [
             {
@@ -67,44 +123,7 @@ class GoogleChatService:
                             "widgets": [
                                 {
                                     "buttonList": {
-                                        "buttons": [
-                                            {
-                                                "text": "✅ Sí",
-                                                "onClick": {
-                                                    "action": {
-                                                        "function": settings.CHAT_ACTION_URL,
-                                                        "parameters": [
-                                                            {"key": "action", "value": "quick_reply"},
-                                                            {"key": "reply", "value": "Sí"}
-                                                        ]
-                                                    }
-                                                }
-                                            },
-                                            {
-                                                "text": "❌ No",
-                                                "onClick": {
-                                                    "action": {
-                                                        "function": settings.CHAT_ACTION_URL,
-                                                        "parameters": [
-                                                            {"key": "action", "value": "quick_reply"},
-                                                            {"key": "reply", "value": "No"}
-                                                        ]
-                                                    }
-                                                }
-                                            },
-                                            {
-                                                "text": "🔄 Cambiar tema",
-                                                "onClick": {
-                                                    "action": {
-                                                        "function": settings.CHAT_ACTION_URL,
-                                                        "parameters": [
-                                                            {"key": "action", "value": "reset"},
-                                                            {"key": "reply", "value": "Cambiar tema"}
-                                                        ]
-                                                    }
-                                                }
-                                            }
-                                        ]
+                                        "buttons": botones
                                     }
                                 }
                             ]
@@ -114,12 +133,97 @@ class GoogleChatService:
             }
         ]
 
+    async def publicar_mensaje_temporal(
+        self,
+        space_name: str,
+        thread_name: Optional[str],
+        texto: str = "⏳ _Analizando tu consulta..._"
+    ) -> Optional[str]:
+        """
+        Publica un mensaje temporal en Google Chat como indicador de procesamiento
+        y retorna su resource name ('spaces/.../messages/...') para actualizarlo luego.
+        """
+        token = await obtener_token_google_chat()
+        if not token or not space_name:
+            return None
+
+        url = f"https://chat.googleapis.com/v1/{space_name}/messages"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        payload: dict = {"text": formatear_para_google_chat(texto)}
+        if thread_name:
+            payload["thread"] = {"name": thread_name}
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    msg_name = data.get("name")
+                    logger.info("[GOOGLE CHAT] Indicador temporal publicado: %s", msg_name)
+                    return msg_name
+        except Exception as error:
+            logger.debug("[GOOGLE CHAT] No se pudo publicar indicador temporal: %s", error)
+        return None
+
+    async def actualizar_mensaje(
+        self,
+        message_name: str,
+        texto: str,
+        mostrar_botones: bool | str = "cerrada"
+    ) -> bool:
+        """
+        Reemplaza in-place el mensaje temporal ('⏳ Analizando tu consulta...')
+        con la respuesta final formateada y sus botones dinámicos mediante PATCH.
+        """
+        token = await obtener_token_google_chat()
+        if not token or not message_name:
+            return False
+
+        texto_formateado = formatear_para_google_chat(texto)
+        cards = self.construir_cards_v2(mostrar_botones)
+
+        url = f"https://chat.googleapis.com/v1/{message_name}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        payload: dict = {"text": texto_formateado}
+        update_mask = "text"
+
+        if cards:
+            payload["cardsV2"] = cards
+            update_mask = "text,cardsV2"
+
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.patch(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    params={"updateMask": update_mask}
+                )
+                if resp.status_code == 200:
+                    logger.info("[GOOGLE CHAT] Mensaje actualizado in-place exitosamente (%s).", message_name)
+                    return True
+                else:
+                    logger.warning(
+                        "[GOOGLE CHAT ADVERTENCIA] PATCH falló (%d): %s. Se usará envío estándar.",
+                        resp.status_code, resp.text[:200]
+                    )
+                    return False
+        except Exception as error:
+            logger.warning("[GOOGLE CHAT ADVERTENCIA] Excepción en PATCH (%s): %s", message_name, error)
+            return False
+
     async def enviar_mensaje(
         self,
         space_name: str,
         thread_name: Optional[str],
         texto: str,
-        mostrar_botones: bool = True
+        mostrar_botones: bool | str = True
     ) -> bool:
         """
         Envía un mensaje a Google Chat vía REST API.
@@ -134,6 +238,7 @@ class GoogleChatService:
         if not token or not space_name:
             return False
         texto_formateado = formatear_para_google_chat(texto)
+        cards = self.construir_cards_v2(mostrar_botones)
 
         url = f"https://chat.googleapis.com/v1/{space_name}/messages"
         headers = {
@@ -147,8 +252,8 @@ class GoogleChatService:
         if thread_name:
             payload["thread"] = {"name": thread_name}
 
-        if mostrar_botones:
-            payload["cardsV2"] = self.construir_cards_v2()
+        if cards:
+            payload["cardsV2"] = cards
 
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
@@ -180,14 +285,12 @@ class GoogleChatService:
             content_type = adjunto.contentType or ""
             content_name = getattr(adjunto, "contentName", None) or adjunto.name or ""
 
-            # Extraer la ruta del recurso para la API REST v1
             resource_path = None
             if adjunto.attachmentDataRef and adjunto.attachmentDataRef.resourceName:
                 resource_path = adjunto.attachmentDataRef.resourceName
             elif adjunto.name:
                 resource_path = adjunto.name
 
-            # Fallback: construir resource_path usando el ID del mensaje padre
             if not resource_path:
                 msg_name = event.get_message_name()
                 if msg_name and "spaces/" in msg_name:
@@ -200,7 +303,6 @@ class GoogleChatService:
                 logger.warning("[GOOGLE CHAT ADVERTENCIA] Omitiendo adjunto sin ruta de recurso válida.")
                 continue
 
-            # Validar si el adjunto corresponde a una imagen
             is_image = (
                 not content_type
                 or content_type.startswith("image/")
@@ -216,12 +318,10 @@ class GoogleChatService:
             if not content_type or content_type == "application/octet-stream":
                 content_type = "image/jpeg"
 
-            # Normalizar el prefijo 'media/' para evitar URLs duplicadas o malformadas
             clean_res = resource_path.lstrip("/")
             if clean_res.startswith("media/"):
                 clean_res = clean_res[6:]
 
-            # Endpoint único y definitivo para Service Accounts en Google Chat API v1
             download_url = f"https://chat.googleapis.com/v1/media/{clean_res}?alt=media"
             headers = {"Authorization": f"Bearer {token}"}
 
@@ -250,7 +350,8 @@ class GoogleChatService:
         self,
         event: GoogleChatEventDTO,
         rag_service: Any,
-        conversation_repo: IConversationRepository
+        conversation_repo: IConversationRepository,
+        msg_temp_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Orquesta el ciclo de recepción y respuesta para el evento de Google Chat.
@@ -260,14 +361,11 @@ class GoogleChatService:
         user_name = event.get_user_display_name()
         user_id = event.get_user_id()
         is_dm = event.is_dm()
-        is_thread_reply = event.is_thread_reply()
         is_button = event.is_button_click()
         action_params = event.get_action_parameters()
         invoked_function = event.get_invoked_function()
 
         is_in_thread = event.is_in_thread()
-
-        # Enrutamiento determinista de hilo:
         target_thread = thread_name if is_in_thread else None
 
         logger.warning(
@@ -306,12 +404,20 @@ class GoogleChatService:
         if is_reset_action or pregunta.lower() in COMANDOS_RESET:
             await asyncio.to_thread(conversation_repo.eliminar_conversacion, conversation_id)
             msg_reset = "🔄 *Contexto reiniciado con éxito.*\n\n¿En qué nuevo tema, problema o requerimiento te puedo ayudar?"
-            enviado = await self.enviar_mensaje(
-                space_name=space_name,
-                thread_name=target_thread,
-                texto=msg_reset,
-                mostrar_botones=False
-            )
+            enviado = False
+            if msg_temp_name:
+                enviado = await self.actualizar_mensaje(
+                    message_name=msg_temp_name,
+                    texto=msg_reset,
+                    mostrar_botones=False
+                )
+            if not enviado:
+                enviado = await self.enviar_mensaje(
+                    space_name=space_name,
+                    thread_name=target_thread,
+                    texto=msg_reset,
+                    mostrar_botones=False
+                )
             if not enviado:
                 payload_sync = {"text": msg_reset}
                 if target_thread:
@@ -322,24 +428,19 @@ class GoogleChatService:
         image_base64 = await self.descargar_imagen_adjunta(event)
 
         if not pregunta and not image_base64:
-            msg_bienvenida = self._mensaje_bienvenida(user_name)
-            enviado = await self.enviar_mensaje(
-                space_name=space_name,
-                thread_name=target_thread,
-                texto=msg_bienvenida,
-                mostrar_botones=False
-            )
-            if not enviado:
-                payload_sync = {"text": msg_bienvenida}
-                if target_thread:
-                    payload_sync["thread"] = {"name": target_thread}
-                return payload_sync
-            return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}} if is_button else {}
+            pregunta = "Hola"
 
         if not pregunta and image_base64:
             pregunta = "Revisa la imagen adjunta y diagnostica el problema o error mostrado."
 
-        respuesta, mostrar_botones = await rag_service.responder(
+        # Publicar burbuja temporal solo si no fue creada previamente por el gestor de reintentos
+        if msg_temp_name is None:
+            msg_temp_name = await self.publicar_mensaje_temporal(
+                space_name=space_name,
+                thread_name=target_thread
+            )
+
+        respuesta, modo_botones = await rag_service.responder(
             conversation_id=conversation_id,
             user_id=user_id,
             user_name=user_name,
@@ -347,20 +448,30 @@ class GoogleChatService:
             image_base64=image_base64
         )
 
-        enviado = await self.enviar_mensaje(
-            space_name=space_name,
-            thread_name=target_thread,
-            texto=respuesta,
-            mostrar_botones=mostrar_botones
-        )
+        enviado = False
+        if msg_temp_name:
+            enviado = await self.actualizar_mensaje(
+                message_name=msg_temp_name,
+                texto=respuesta,
+                mostrar_botones=modo_botones
+            )
+
+        if not enviado:
+            enviado = await self.enviar_mensaje(
+                space_name=space_name,
+                thread_name=target_thread,
+                texto=respuesta,
+                mostrar_botones=modo_botones
+            )
 
         if not enviado:
             logger.info("[GOOGLE CHAT] Enviando respuesta de forma síncrona en el body HTTP 200.")
             payload_sync: dict = {"text": respuesta}
             if target_thread:
                 payload_sync["thread"] = {"name": target_thread}
-            if mostrar_botones:
-                payload_sync["cardsV2"] = self.construir_cards_v2()
+            cards = self.construir_cards_v2(modo_botones)
+            if cards:
+                payload_sync["cardsV2"] = cards
             return payload_sync
 
         return {"actionResponse": {"type": "TYPE_UNSPECIFIED"}} if is_button else {}
@@ -370,16 +481,34 @@ class GoogleChatService:
         event: GoogleChatEventDTO,
         rag_service: Any,
         conversation_repo: IConversationRepository,
-        max_reintentos: int = 3
+        max_reintentos: int = 2
     ) -> None:
         """
-        Ejecuta el procesamiento del evento en segundo plano con lógica de reintentos
-        y garantía de respuesta al usuario mediante REST API.
+        Ejecuta el procesamiento del evento en segundo plano con una única burbuja
+        temporal reutilizable entre reintentos y garantía de respuesta al usuario.
         """
         space_name, _ = event.get_space()
         thread_name = event.get_thread_name()
         is_in_thread = event.is_in_thread()
         target_thread = thread_name if is_in_thread else None
+
+        is_button = event.is_button_click()
+        action_params = event.get_action_parameters()
+        invoked_function = event.get_invoked_function()
+        pregunta_raw = action_params.get("reply") or action_params.get("value") or event.get_text_content()
+        es_reset = (
+            invoked_function in {"reset", "reset_context"}
+            or action_params.get("action") in {"reset", "reset_context"}
+            or pregunta_raw.lower() in COMANDOS_RESET
+        )
+
+        # Publicar UNA sola burbuja temporal antes de entrar al bucle de reintentos
+        msg_temp_name: Optional[str] = None
+        if not event.is_added_to_space() and not es_reset and space_name:
+            msg_temp_name = await self.publicar_mensaje_temporal(
+                space_name=space_name,
+                thread_name=target_thread
+            )
 
         intentos = 0
         exito = False
@@ -391,7 +520,8 @@ class GoogleChatService:
                 await self.procesar_evento_chat(
                     event=event,
                     rag_service=rag_service,
-                    conversation_repo=conversation_repo
+                    conversation_repo=conversation_repo,
+                    msg_temp_name=msg_temp_name
                 )
                 exito = True
             except Exception as error:
@@ -400,18 +530,26 @@ class GoogleChatService:
                     intentos, max_reintentos, error, exc_info=True
                 )
                 if intentos < max_reintentos:
-                    await asyncio.sleep(1.5 * intentos)
+                    await asyncio.sleep(1.0 * intentos)
 
         if not exito and space_name:
             msg_error = (
                 "⚠️ *Inconveniente temporal de conexión*\n\n"
-                "Tuve un problema procesando tu solicitud debido a una alta latencia en los servicios. "
-                "Por favor, intenta enviar tu consulta de nuevo."
+                "El servicio de inteligencia artificial está experimentando alta demanda en este momento. "
+                "Por favor, intenta enviar tu consulta de nuevo en unos segundos."
             )
-            logger.warning("[RESILIENCIA] Enviando respuesta de emergencia a %s", space_name)
-            await self.enviar_mensaje(
-                space_name=space_name,
-                thread_name=target_thread,
-                texto=msg_error,
-                mostrar_botones=False
-            )
+            logger.warning("[RESILIENCIA] Actualizando/enviando respuesta de emergencia a %s", space_name)
+            actualizado = False
+            if msg_temp_name:
+                actualizado = await self.actualizar_mensaje(
+                    message_name=msg_temp_name,
+                    texto=msg_error,
+                    mostrar_botones=False
+                )
+            if not actualizado:
+                await self.enviar_mensaje(
+                    space_name=space_name,
+                    thread_name=target_thread,
+                    texto=msg_error,
+                    mostrar_botones=False
+                )

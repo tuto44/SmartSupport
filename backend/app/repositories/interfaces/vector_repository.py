@@ -35,3 +35,8 @@ class IVectorRepository(ABC):
     def obtener_estadisticas(self) -> Optional[Any]:
         """Retorna estadísticas de la colección."""
         pass
+
+    @abstractmethod
+    def listar_documentos_indexados(self) -> List[str]:
+        """Retorna los nombres únicos de los documentos actualmente indexados."""
+        pass

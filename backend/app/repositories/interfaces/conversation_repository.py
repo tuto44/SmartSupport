@@ -67,3 +67,8 @@ class IConversationRepository(ABC):
     def eliminar_conversacion(self, conversation_id: str) -> None:
         """Elimina una conversación y sus mensajes en cascada."""
         pass
+
+    @abstractmethod
+    def expirar_conversacion_si_inactiva(self, conversation_id: str, timeout_minutos: int) -> bool:
+        """Elimina la conversación si superó el tiempo de inactividad configurado."""
+        pass

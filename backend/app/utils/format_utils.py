@@ -4,8 +4,8 @@ import re
 def limpiar_razonamiento_interno(texto: str) -> str:
     """
     Elimina los bloques de razonamiento interno <razonamiento>...</razonamiento>
-    generados por el modelo (Chain-of-Thought oculto).
-    Incluye un respaldo defensivo en caso de truncamiento antes del cierre de etiqueta.
+    generados por el modelo (Chain-of-Thought oculto) y cualquier etiqueta
+    residual de control (como TIPO_PREGUNTA).
     """
     if not texto:
         return texto
@@ -24,6 +24,20 @@ def limpiar_razonamiento_interno(texto: str) -> str:
         '',
         texto_limpio,
         flags=re.DOTALL | re.IGNORECASE
+    )
+
+    # 3. Eliminar líneas completas con TIPO_PREGUNTA (con o sin espacios alrededor de ':' o negritas)
+    texto_limpio = re.sub(
+        r'(?im)^[ \t]*\*{0,2}TIPO_PREGUNTA\s*:.*$',
+        '',
+        texto_limpio
+    )
+
+    # 4. Eliminar menciones inline residuales de TIPO_PREGUNTA
+    texto_limpio = re.sub(
+        r'(?i)\s*\*{0,2}TIPO_PREGUNTA\s*:\s*(?:CERRADA|ABIERTA)?\*{0,2}',
+        '',
+        texto_limpio
     )
 
     return texto_limpio.strip()

@@ -47,7 +47,7 @@ class Settings(BaseSettings):
         description="Número máximo de fragmentos a recuperar en similitud"
     )
     MIN_SIMILARITY_SCORE: float = Field(
-        default=0.52,
+        default=0.60,
         description="Umbral mínimo de similitud coseno (calibrado a 0.45 para optimizar recall en búsquedas semánticas)"
     )
 
@@ -63,6 +63,18 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = Field(
         default=200,
         description="Solapamiento de caracteres entre chunks consecutivos"
+    )
+
+    # Sesión e Inactividad
+    CONVERSATION_TIMEOUT_MINUTES: int = Field(
+        default=15,
+        description="Minutos de inactividad antes de finalizar y limpiar una conversación"
+    )
+
+    # Contacto Oficial de Soporte Local TI HWI
+    TI_HWI_EMAIL: str = Field(
+        default="administrador.ti@hacebwhirlpool.com",
+        description="Correo oficial del Encargado de TI de HWI para escalamientos"
     )
 
     # MySQL / SQLAlchemy

@@ -110,3 +110,30 @@ class QdrantVectorRepository(IVectorRepository):
         if not self.client.collection_exists(collection_name=self.collection_name):
             return None
         return self.client.get_collection(collection_name=self.collection_name)
+
+    def listar_documentos_indexados(self) -> List[str]:
+        if not self.client.collection_exists(collection_name=self.collection_name):
+            return []
+
+        nombres: set[str] = set()
+        next_offset = None
+        try:
+            while True:
+                puntos, next_offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    with_payload=["document_name"],
+                    with_vectors=False,
+                    limit=250,
+                    offset=next_offset
+                )
+                for punto in puntos:
+                    payload = getattr(punto, "payload", {}) or {}
+                    doc_name = payload.get("document_name")
+                    if doc_name and isinstance(doc_name, str):
+                        nombres.add(doc_name.strip())
+                if next_offset is None:
+                    break
+        except Exception as e:
+            print(f"[QDRANT ERROR] Error listando documentos indexados: {e}")
+
+        return sorted(nombres)
